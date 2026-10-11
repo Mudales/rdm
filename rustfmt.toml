@@ -1,0 +1,7 @@
+# Stable-only options so `cargo fmt --check` behaves identically on every
+# toolchain the CI matrix uses.
+edition = "2024"
+max_width = 100
+newline_style = "Unix"
+use_field_init_shorthand = true
+use_try_shorthand = true

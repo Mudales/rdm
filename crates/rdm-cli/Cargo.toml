@@ -1,0 +1,23 @@
+[package]
+name = "rdm-cli"
+description = "Headless command-line front end for the rdm download engine."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[[bin]]
+name = "rdm"
+path = "src/main.rs"
+
+[dependencies]
+rdm-core.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

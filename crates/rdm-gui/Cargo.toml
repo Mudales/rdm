@@ -1,0 +1,22 @@
+[package]
+name = "rdm-gui"
+description = "Desktop GUI for rdm (Tauri v2)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+# Tauri, tauri-build and the web frontend are added in Phase 3. Keeping this a
+# plain binary until then means Phase 0-2 CI needs no WebKitGTK system
+# packages on Linux.
+
+[dependencies]
+rdm-core.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

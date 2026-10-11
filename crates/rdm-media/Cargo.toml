@@ -1,0 +1,16 @@
+[package]
+name = "rdm-media"
+description = "HLS/DASH manifest parsing and ffmpeg muxing for rdm."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+rdm-core.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

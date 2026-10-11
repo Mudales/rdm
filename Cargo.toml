@@ -1,0 +1,57 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/rdm-core",
+    "crates/rdm-media",
+    "crates/rdm-cli",
+    "crates/rdm-host",
+    "crates/rdm-gui",
+    "tests",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/OWNER/rdm"
+authors = ["rdm contributors"]
+
+# Versions are pinned here once and inherited by member crates with
+# `dep.workspace = true`. Dependencies are added to this table in the phase
+# that first uses them.
+[workspace.dependencies]
+rdm-core = { path = "crates/rdm-core" }
+rdm-media = { path = "crates/rdm-media" }
+
+anyhow = "1.0.100"
+clap = { version = "4.5", features = ["derive"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0"
+tokio = { version = "1.47", default-features = false }
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }
+
+[workspace.lints.rust]
+# Positioned file writes (`FileExt::write_at` / `seek_write`) are safe std
+# APIs, so the project needs no `unsafe` at all. A crate that genuinely needs
+# it must opt out locally with a justification comment.
+unsafe_code = "forbid"
+rust_2018_idioms = { level = "warn", priority = -1 }
+unused_qualifications = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+# "No panics in library code": these are errors in CI via `-D warnings`.
+# Test code is exempted in clippy.toml.
+unwrap_used = "warn"
+expect_used = "warn"
+panic = "warn"
+todo = "warn"
+unimplemented = "warn"
+dbg_macro = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

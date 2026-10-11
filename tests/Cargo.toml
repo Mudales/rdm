@@ -1,0 +1,15 @@
+[package]
+name = "rdm-tests"
+description = "Integration tests and mock HTTP server for rdm."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+rdm-core.workspace = true
+
+[lints]
+workspace = true

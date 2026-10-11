@@ -1,0 +1,17 @@
+[package]
+name = "rdm-host"
+description = "Native Messaging host bridging the rdm browser extension and the rdm app."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,20 @@
+# Rust
+/target/
+**/*.rs.bk
+
+# Download engine artifacts produced by local runs / tests
+*.rdm
+*.rdm.tmp
+
+# Frontend / extension builds
+node_modules/
+/extension/dist/
+/crates/rdm-gui/dist/
+/crates/rdm-gui/gen/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
