@@ -64,16 +64,31 @@ jobs:
         shell: bash
         run: scripts/build-host-sidecar.sh ${{ matrix.sidecar }}
 
-      - uses: tauri-apps/tauri-action@v0
+      # Optional signing (see docs/RELEASING.md). Unset secrets arrive as
+      # empty strings, and Tauri tries to sign whenever APPLE_CERTIFICATE
+      # exists at all, so only export the variables that have values.
+      - name: Enable macOS signing when configured
+        if: runner.os == 'macOS'
+        shell: bash
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # Optional signing (see docs/RELEASING.md); empty means unsigned.
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          for name in APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_SIGNING_IDENTITY APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID; do
+            if [ -n "${!name}" ]; then
+              echo "$name=${!name}" >> "$GITHUB_ENV"
+              echo "$name is set"
+            fi
+          done
+          if [ -z "$APPLE_CERTIFICATE" ]; then echo "No signing certificate: building unsigned."; fi
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
           projectPath: crates/rdm-gui
           tauriScript: tauri
