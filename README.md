@@ -4,9 +4,9 @@ A cross-platform (macOS, Windows, Linux) download manager written in Rust,
 inspired by Internet Download Manager and
 [ab-download-manager](https://github.com/amir1376/ab-download-manager).
 
-> **Status:** Phases 1–2 done. The download engine (`rdm-core`) and the
-> headless `rdm` CLI work and are tested against a fault-injecting mock
-> server; the GUI, browser integration and streaming media come next.
+> **Status:** Phases 1–3 done: the download engine (`rdm-core`), the
+> headless `rdm` CLI, and the desktop app (`rdm-gui`, backed by
+> `rdm-manager`). Browser integration and streaming media come next.
 > See [Roadmap](#roadmap).
 
 ## Architecture
@@ -19,11 +19,12 @@ flowchart LR
 
     subgraph rdm["rdm processes"]
         HOST["rdm-host<br/>native messaging host<br/>(stdio, length-prefixed JSON)"]
-        GUI["rdm-gui<br/>Tauri v2 app<br/>(UI, queues, SQLite, tray)"]
+        GUI["rdm-gui<br/>Tauri v2 shell<br/>(web UI, tray, single instance)"]
         CLI["rdm-cli<br/>headless binary"]
     end
 
     subgraph libs["libraries"]
+        MGR["rdm-manager<br/>download list, SQLite,<br/>queues, categories, settings"]
         MEDIA["rdm-media<br/>HLS / DASH parsing,<br/>ffmpeg muxing"]
         CORE["rdm-core<br/>download engine<br/>(probe, segmentation, resume,<br/>throttling, progress events)"]
     end
@@ -34,8 +35,9 @@ flowchart LR
 
     EXT <-- "native messaging" --> HOST
     HOST <-- "local IPC" --> GUI
-    GUI --> MEDIA
-    GUI --> CORE
+    GUI --> MGR
+    MGR --> MEDIA
+    MGR --> CORE
     CLI --> CORE
     MEDIA --> CORE
     MEDIA --> FFMPEG
@@ -50,10 +52,11 @@ library. CI enforces this with [`scripts/check-deps.sh`](scripts/check-deps.sh).
 | Path | Kind | Responsibility |
 |---|---|---|
 | `crates/rdm-core` | lib | Probing, dynamic segmentation, positioned writes to one sparse file, resume metadata, retry/backoff, throttling, progress events |
+| `crates/rdm-manager` | lib | The download list: SQLite persistence, queues with concurrency limits, categories with folders, settings, change events. No GUI dependency |
 | `crates/rdm-media` | lib | HLS/DASH manifest parsing, segment download, ffmpeg muxing, AES-128 HLS |
 | `crates/rdm-cli` | bin `rdm` | Headless front end, used to test the engine without a GUI |
 | `crates/rdm-host` | bin `rdm-host` | Native messaging host, plus manifest installer for Chrome, Edge and Firefox |
-| `crates/rdm-gui` | bin `rdm-gui` | Tauri v2 desktop app |
+| `crates/rdm-gui` | bin `rdm-gui` | Tauri v2 desktop app: commands over `rdm-manager`, plain HTML/CSS/JS UI in `ui/` (no build step) |
 | `extension/` | MV3 | Browser extension |
 | `tests/` | crate `rdm-tests` | axum mock server and integration tests |
 
@@ -84,6 +87,28 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 ```bash
 ./scripts/check-deps.sh
 ```
+
+## The desktop app
+
+- **Download list:** speed, ETA, and a progress bar that shows each
+  connection's segment. Selecting a download opens a details pane.
+- **Add URL:** the server is checked first, which fills in the file name,
+  size, whether it can resume, the category and the folder. Downloads can
+  start now, go into a queue, or be added stopped. Referer, User-Agent and
+  cookies can be set per download.
+- **Queues:** each runs N downloads at a time and starts the next one when a
+  download finishes. Queues start stopped when the app opens, so nothing
+  downloads unexpectedly.
+- **Categories:** Video, Music, Documents, Archives, Programs and Other, each
+  with its own folder and editable extension list.
+- **Settings:** connections, minimum piece size, total speed limit, proxy,
+  default folder, close to tray.
+- **Persistence:** everything is kept in SQLite in the app data folder.
+  Downloads that were running when the app quit come back stopped and resume
+  from their `.rdm` file. Cookies are kept in memory only and never written
+  to disk.
+- **Tray and window:** a tray icon, close to tray, and a single running
+  instance (launching again focuses the open window).
 
 ## Using the CLI
 
@@ -190,10 +215,26 @@ cargo run -p rdm-tests --bin mock-server -- --size 64M --error 503:2:1 --drop-af
 - **Politeness:** a per-host connection cap (16 by default) applies across
   all downloads.
 
+The desktop app needs the Tauri v2 system libraries. macOS and Windows have
+them already. On Debian/Ubuntu:
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev
+```
+
+```bash
+cargo run -p rdm-gui
+```
+
+The UI in `crates/rdm-gui/ui` is plain HTML, CSS and JS with no build step.
+Opened in an ordinary browser, it switches to a mock backend (`mock.js`) with
+simulated downloads, so you can work on the layout without building the app:
+
+```bash
+python3 -m http.server 5174 --directory crates/rdm-gui/ui
+```
+
 Later phases add more prerequisites:
-- **Phase 3 (GUI):** the Tauri v2 system dependencies. On Linux that's
-  `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev` and
-  `patchelf`.
 - **Phase 4 (extension):** Node.js, if the extension is written in TypeScript.
 - **Phase 5 (media):** ffmpeg on `PATH`. If it's missing, rdm offers to
   download it.
@@ -220,8 +261,8 @@ Later phases add more prerequisites:
 | 0 | Workspace, lints, CI, README | ✅ |
 | 1 | `rdm-core` engine + `rdm-cli` | ✅ |
 | 2 | Mock server fault injection + integration tests | ✅ |
-| 3 | Tauri GUI, SQLite persistence, tray | ⏳ |
-| 4 | MV3 extension + native messaging host | |
+| 3 | Tauri GUI, SQLite persistence, tray | ✅ |
+| 4 | MV3 extension + native messaging host | ⏳ |
 | 5 | HLS/DASH + ffmpeg muxing | |
 | 6 | Scheduler, import/export, checksums, AV hook, duplicates, drag-and-drop | |
 | 7 | Packaging, signing docs, v0.1.0 release | |

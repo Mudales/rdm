@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>rdm</title>
+  <link rel="stylesheet" href="style.css">
+  <script type="module" src="app.js"></script>
+</head>
+<body>
+  <header class="toolbar" role="toolbar" aria-label="Actions">
+    <button id="btn-add" class="primary" title="Add a URL (Ctrl/Cmd+N)">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+      <span>Add URL</span>
+    </button>
+    <div class="sep"></div>
+    <button id="btn-start" title="Start or resume the selected downloads">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z" class="fill"/></svg>
+      <span>Resume</span>
+    </button>
+    <button id="btn-stop" title="Stop the selected downloads (progress is kept)">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5h3v14H8zM13 5h3v14h-3z" class="fill"/></svg>
+      <span>Stop</span>
+    </button>
+    <button id="btn-remove" title="Remove the selected downloads (Delete)">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>
+      <span>Remove</span>
+    </button>
+    <div class="sep"></div>
+    <button id="btn-queue" title="Start or stop the queue">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h11M4 12h11M4 18h7M17 14v7l5-3.5z"/></svg>
+      <span id="btn-queue-label">Start queue</span>
+    </button>
+    <div class="spacer"></div>
+    <input id="search" type="search" placeholder="Filter downloads" aria-label="Filter downloads">
+    <button id="btn-settings" class="icon-only" title="Settings" aria-label="Settings">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
+    </button>
+  </header>
+
+  <div class="body">
+    <nav class="sidebar" id="sidebar" aria-label="Views"></nav>
+
+    <main class="main">
+      <div class="table-wrap" id="table-wrap">
+        <table class="downloads" id="downloads" aria-label="Downloads">
+          <thead>
+            <tr>
+              <th class="c-name">Name</th>
+              <th class="c-size">Size</th>
+              <th class="c-progress">Progress</th>
+              <th class="c-speed">Speed</th>
+              <th class="c-status">Status</th>
+              <th class="c-added">Added</th>
+            </tr>
+          </thead>
+          <tbody id="rows"></tbody>
+        </table>
+        <div class="empty" id="empty" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v10M7 10l5 5 5-5M5 20h14"/></svg>
+          <p>No downloads here yet.</p>
+          <button id="btn-add-empty" class="primary">Add a URL</button>
+        </div>
+      </div>
+      <section class="details" id="details" hidden aria-label="Download details"></section>
+    </main>
+  </div>
+
+  <footer class="statusbar">
+    <span id="status-active">Idle</span>
+    <span id="status-speed"></span>
+  </footer>
+
+  <!-- Add URL -->
+  <dialog id="dlg-add" aria-labelledby="dlg-add-title">
+    <form method="dialog" id="form-add">
+      <h2 id="dlg-add-title">Add download</h2>
+      <label class="field">
+        <span>URL</span>
+        <div class="row">
+          <input id="add-url" type="url" required placeholder="https://example.com/file.zip" autocomplete="off" spellcheck="false">
+          <button type="button" id="add-check">Check</button>
+        </div>
+      </label>
+      <p class="probe-info" id="add-info" aria-live="polite"></p>
+      <label class="field">
+        <span>Save as</span>
+        <input id="add-name" type="text" placeholder="Determined from the server" spellcheck="false">
+      </label>
+      <div class="grid2">
+        <label class="field">
+          <span>Category</span>
+          <select id="add-category"></select>
+        </label>
+        <label class="field">
+          <span>Queue</span>
+          <select id="add-queue"></select>
+        </label>
+      </div>
+      <label class="field">
+        <span>Folder</span>
+        <div class="row">
+          <input id="add-dir" type="text" spellcheck="false">
+          <button type="button" id="add-browse">Browse…</button>
+        </div>
+      </label>
+      <details class="advanced">
+        <summary>Advanced</summary>
+        <div class="grid2">
+          <label class="field">
+            <span>Connections</span>
+            <input id="add-conns" type="number" min="1" max="32" placeholder="Default">
+          </label>
+          <label class="field">
+            <span>Speed limit (KiB/s)</span>
+            <input id="add-limit" type="number" min="0" placeholder="Unlimited">
+          </label>
+        </div>
+        <label class="field"><span>Referer</span><input id="add-referer" type="text" spellcheck="false"></label>
+        <label class="field"><span>User-Agent</span><input id="add-ua" type="text" spellcheck="false"></label>
+        <label class="field"><span>Cookies (kept in memory only)</span><input id="add-cookies" type="text" spellcheck="false" placeholder="name=value; other=value"></label>
+      </details>
+      <p class="error" id="add-error" role="alert"></p>
+      <div class="actions">
+        <button type="button" value="cancel" id="add-cancel">Cancel</button>
+        <div class="spacer"></div>
+        <button type="button" id="add-paused">Add stopped</button>
+        <button type="button" id="add-queue-btn">Add to queue</button>
+        <button type="submit" class="primary" id="add-now">Start now</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Remove -->
+  <dialog id="dlg-remove" aria-labelledby="dlg-remove-title">
+    <form method="dialog">
+      <h2 id="dlg-remove-title">Remove downloads</h2>
+      <p id="remove-text"></p>
+      <label class="check"><input type="checkbox" id="remove-files"> Also delete the files from disk</label>
+      <div class="actions">
+        <div class="spacer"></div>
+        <button value="cancel">Cancel</button>
+        <button value="ok" class="danger" id="remove-ok">Remove</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Settings -->
+  <dialog id="dlg-settings" class="wide" aria-labelledby="dlg-settings-title">
+    <form method="dialog" id="form-settings">
+      <h2 id="dlg-settings-title">Settings</h2>
+      <div class="tabs" role="tablist">
+        <button type="button" role="tab" data-tab="general" aria-selected="true">General</button>
+        <button type="button" role="tab" data-tab="connection">Connection</button>
+        <button type="button" role="tab" data-tab="categories">Categories</button>
+        <button type="button" role="tab" data-tab="queues">Queues</button>
+      </div>
+
+      <section class="tab" data-tab="general">
+        <label class="field">
+          <span>Default folder (for files without a category)</span>
+          <div class="row">
+            <input id="set-dir" type="text" spellcheck="false">
+            <button type="button" data-browse="set-dir">Browse…</button>
+          </div>
+        </label>
+        <label class="check"><input type="checkbox" id="set-tray"> Closing the window keeps rdm running in the system tray</label>
+      </section>
+
+      <section class="tab" data-tab="connection" hidden>
+        <div class="grid2">
+          <label class="field">
+            <span>Connections per download</span>
+            <input id="set-conns" type="number" min="1" max="32" required>
+          </label>
+          <label class="field">
+            <span>Minimum piece size (KiB)</span>
+            <input id="set-split" type="number" min="64" required>
+          </label>
+        </div>
+        <label class="field">
+          <span>Total speed limit (KiB/s, 0 = unlimited)</span>
+          <input id="set-limit" type="number" min="0">
+        </label>
+        <fieldset class="field">
+          <legend>Proxy</legend>
+          <label class="check"><input type="radio" name="proxy" value="system"> Use system settings</label>
+          <label class="check"><input type="radio" name="proxy" value="direct"> No proxy</label>
+          <label class="check"><input type="radio" name="proxy" value="custom"> Custom:</label>
+          <input id="set-proxy-url" type="text" placeholder="http://host:8080 or socks5://user:pass@host:1080" spellcheck="false">
+        </fieldset>
+      </section>
+
+      <section class="tab" data-tab="categories" hidden>
+        <p class="hint">Files go to the first category whose extensions match. A category with no extensions catches everything else.</p>
+        <div class="list-editor" id="set-categories"></div>
+        <button type="button" id="set-add-category">Add category</button>
+      </section>
+
+      <section class="tab" data-tab="queues" hidden>
+        <p class="hint">"Add to queue" downloads wait in their queue and start when the queue is started, a few at a time.</p>
+        <div class="list-editor" id="set-queues"></div>
+        <button type="button" id="set-add-queue">Add queue</button>
+      </section>
+
+      <p class="error" id="set-error" role="alert"></p>
+      <div class="actions">
+        <div class="spacer"></div>
+        <button type="button" id="set-cancel">Cancel</button>
+        <button type="submit" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <menu class="context" id="context" hidden role="menu"></menu>
+  <div class="toasts" id="toasts" aria-live="polite"></div>
+</body>
+</html>

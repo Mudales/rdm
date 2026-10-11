@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "Permissions for the main window. App commands are allowed by default; only core events/window APIs are needed from the frontend.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
