@@ -115,6 +115,10 @@ impl Ffmpeg {
         if status.success() {
             return Ok(());
         }
+        // Do not leave a broken output behind (ffmpeg's last argument).
+        if let Some(out) = args.last() {
+            let _ = std::fs::remove_file(out);
+        }
         let tail: Vec<&str> = stderr.lines().rev().take(6).collect();
         Err(Error::Ffmpeg(
             tail.into_iter().rev().collect::<Vec<_>>().join("\n"),

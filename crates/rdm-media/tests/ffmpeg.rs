@@ -12,12 +12,23 @@ use rdm_core::{Engine, EngineConfig, ProxyConfig, Request};
 use rdm_media::{Ffmpeg, FfmpegConfig, MediaEngine, MediaJob, MediaOutcome, OutputFormat};
 use rdm_tests::{MockConfig, MockServer};
 
+/// ffmpeg with an H.264 encoder (what real HLS streams carry). MPEG-4
+/// Part 2 is no substitute: ffmpeg cannot read its frame size from MPEG-TS
+/// without decoding, so it cannot be stream-copied into MP4.
 fn ffmpeg() -> Option<PathBuf> {
-    let found = Ffmpeg::new(FfmpegConfig::Auto, None).locate();
-    if found.is_none() {
+    let Some(found) = Ffmpeg::new(FfmpegConfig::Auto, None).locate() else {
         eprintln!("ffmpeg not found; skipping");
+        return None;
+    };
+    let encoders = Command::new(&found)
+        .args(["-hide_banner", "-encoders"])
+        .output()
+        .ok()?;
+    if !String::from_utf8_lossy(&encoders.stdout).contains("libx264") {
+        eprintln!("ffmpeg has no libx264 encoder; skipping");
+        return None;
     }
-    found
+    Some(found)
 }
 
 fn run(ffmpeg: &Path, args: &[&str]) {
@@ -60,7 +71,9 @@ fn make_hls(ffmpeg: &Path, dir: &Path, extra: &[&str]) {
         "-i",
         "sine=frequency=440:duration=3",
         "-c:v",
-        "mpeg4",
+        "libx264",
+        "-preset",
+        "ultrafast",
         "-c:a",
         "aac",
         "-shortest",
@@ -225,5 +238,39 @@ async fn audio_is_extracted() {
     assert!(
         info.contains("Audio:") && !info.contains("Video:"),
         "{info}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_merge_leaves_no_partial_output() {
+    let Some(ff) = ffmpeg() else { return };
+    // Garbage "TS" segments: joining works, ffmpeg's remux fails.
+    let mut cfg = MockConfig::new(1).with_file(
+        "/bad/index.m3u8",
+        "#EXTM3U\n#EXTINF:1,\na.ts\n#EXTINF:1,\nb.ts\n#EXT-X-ENDLIST\n",
+        "application/vnd.apple.mpegurl",
+    );
+    for name in ["a", "b"] {
+        cfg = cfg.with_file(&format!("/bad/{name}.ts"), vec![0x42u8; 4000], "video/mp2t");
+    }
+    let server = MockServer::start(cfg).await.unwrap();
+    let out = tempfile::tempdir().unwrap();
+    let engine = MediaEngine::new(
+        Engine::new(EngineConfig::default()),
+        Ffmpeg::new(FfmpegConfig::Path(ff.clone()), None),
+    );
+    let request = Request::new(&format!("http://{}/bad/index.m3u8", server.addr()))
+        .unwrap()
+        .proxy(ProxyConfig::Direct);
+    let job = MediaJob::new(request, out.path().join("bad.mp4"));
+    let result = engine.start(job).unwrap().wait().await;
+    assert!(
+        matches!(result, Err(rdm_media::Error::Ffmpeg(_))),
+        "{result:?}"
+    );
+    assert!(!out.path().join("bad.mp4").exists(), "no partial output");
+    assert!(
+        out.path().join("bad.mp4.rdm-parts").exists(),
+        "parts kept for a retry"
     );
 }
