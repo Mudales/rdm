@@ -4,68 +4,16 @@
 // test exemptions.
 #![allow(clippy::unwrap_used, clippy::panic)]
 
+mod common;
+
 use std::num::{NonZeroU64, NonZeroUsize};
-use std::path::Path;
 use std::time::{Duration, Instant};
 
-use rdm_core::{
-    Destination, DownloadHandle, DownloadSpec, Engine, EngineConfig, Error, Event, Outcome,
-    ProxyConfig, Request, State,
+use common::{
+    MIB, assert_content, completed, engine, finish, progress_reaches, sidecar_ranges, spec,
 };
-use rdm_tests::{MockConfig, MockServer, verify_file};
-use tokio::sync::broadcast;
-
-const MIB: u64 = 1 << 20;
-
-fn engine() -> Engine {
-    Engine::new(EngineConfig {
-        progress_interval: Duration::from_millis(50),
-        checkpoint_interval: Duration::from_millis(200),
-        ..EngineConfig::default()
-    })
-}
-
-fn spec(server: &MockServer, dest: Destination, connections: usize) -> DownloadSpec {
-    let request = Request::new(&server.url())
-        .unwrap()
-        .proxy(ProxyConfig::Direct);
-    let mut spec = DownloadSpec::new(request, dest);
-    spec.connections = NonZeroUsize::new(connections).unwrap();
-    spec.min_split = 256 * 1024;
-    spec
-}
-
-fn assert_content(path: &Path, seed: u64, size: u64) {
-    verify_file(path, seed, size).unwrap().unwrap();
-    assert!(
-        !rdm_core::sidecar_path(path).exists(),
-        "sidecar should be removed on completion"
-    );
-}
-
-async fn completed(handle: DownloadHandle) -> (std::path::PathBuf, u64, u64) {
-    match handle.wait().await.unwrap() {
-        Outcome::Completed {
-            path,
-            size,
-            resumed_from,
-            ..
-        } => (path, size, resumed_from),
-        other => panic!("expected completion, got {other:?}"),
-    }
-}
-
-/// Waits until the download has at least `bytes` on disk.
-async fn progress_reaches(rx: &mut broadcast::Receiver<Event>, bytes: u64) {
-    loop {
-        match rx.recv().await {
-            Ok(Event::Progress(p)) if p.downloaded >= bytes => return,
-            Ok(Event::State(State::Failed(e))) => panic!("download failed: {e}"),
-            Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
-            Err(e) => panic!("event channel closed: {e}"),
-        }
-    }
-}
+use rdm_core::{Destination, Engine, EngineConfig, Error, Event, Outcome, State};
+use rdm_tests::{MockConfig, MockServer};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn segmented_download_is_byte_exact() {
@@ -131,7 +79,7 @@ async fn stop_then_start_resumes_without_refetching() {
     let mut rx = handle.subscribe();
     progress_reaches(&mut rx, 2 * MIB).await;
     handle.stop();
-    let downloaded = match handle.wait().await.unwrap() {
+    let downloaded = match finish(handle).await.unwrap() {
         Outcome::Stopped { downloaded, .. } => downloaded,
         other => panic!("expected stop, got {other:?}"),
     };
@@ -166,13 +114,6 @@ async fn stop_then_start_resumes_without_refetching() {
     }
 }
 
-/// Completed ranges recorded in a download's `.rdm` sidecar.
-fn sidecar_ranges(dest: &Path) -> Vec<(u64, u64)> {
-    let json: serde_json::Value =
-        serde_json::from_slice(&std::fs::read(rdm_core::sidecar_path(dest)).unwrap()).unwrap();
-    serde_json::from_value(json["completed"].clone()).unwrap()
-}
-
 #[tokio::test(flavor = "multi_thread")]
 async fn changed_resource_restarts_from_zero() {
     let size = 6 * MIB;
@@ -188,7 +129,7 @@ async fn changed_resource_restarts_from_zero() {
     let mut rx = handle.subscribe();
     progress_reaches(&mut rx, MIB).await;
     handle.stop();
-    handle.wait().await.unwrap();
+    finish(handle).await.unwrap();
 
     server.update(|c| {
         c.seed = 1;
@@ -286,7 +227,7 @@ async fn existing_file_is_not_overwritten_by_default() {
     let handle = engine()
         .start(spec(&server, Destination::File(dest.clone()), 2))
         .unwrap();
-    let err = handle.wait().await.unwrap_err();
+    let err = finish(handle).await.unwrap_err();
     assert!(matches!(err, Error::DestinationExists(_)), "{err:?}");
     assert_eq!(std::fs::read(&dest).unwrap(), b"keep me");
 
@@ -392,7 +333,7 @@ async fn cancel_deletes_partial_data() {
     let mut rx = handle.subscribe();
     progress_reaches(&mut rx, 256 * 1024).await;
     handle.cancel();
-    assert_eq!(handle.wait().await.unwrap(), Outcome::Cancelled);
+    assert_eq!(finish(handle).await.unwrap(), Outcome::Cancelled);
     assert!(!dest.exists());
     assert!(!rdm_core::sidecar_path(&dest).exists());
 }
@@ -429,13 +370,9 @@ async fn per_host_connection_cap_is_respected() {
 #[tokio::test(flavor = "multi_thread")]
 async fn http_errors_are_reported() {
     let server = MockServer::start(MockConfig::new(10)).await.unwrap();
-    let request = Request::new(&format!("http://{}/x", server.addr()))
-        .unwrap()
-        .proxy(ProxyConfig::Direct);
+    let request = common::request(&format!("http://{}/x", server.addr()));
     // The mock answers every path, so use a closed port for a network error.
-    let closed = Request::new("http://127.0.0.1:9/")
-        .unwrap()
-        .proxy(ProxyConfig::Direct);
+    let closed = common::request("http://127.0.0.1:9/");
     let info = engine().probe(&request).await.unwrap();
     assert_eq!(info.size, Some(10));
     assert!(info.resumable);

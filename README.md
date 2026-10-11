@@ -4,8 +4,9 @@ A cross-platform (macOS, Windows, Linux) download manager written in Rust,
 inspired by Internet Download Manager and
 [ab-download-manager](https://github.com/amir1376/ab-download-manager).
 
-> **Status:** Phase 1 done. The download engine (`rdm-core`) and the headless
-> `rdm` CLI work; the GUI, browser integration and streaming media come next.
+> **Status:** Phases 1–2 done. The download engine (`rdm-core`) and the
+> headless `rdm` CLI work and are tested against a fault-injecting mock
+> server; the GUI, browser integration and streaming media come next.
 > See [Roadmap](#roadmap).
 
 ## Architecture
@@ -129,6 +130,39 @@ On an M-series Mac this took 41.4 s with one connection and 5.2 s with
 eight. A `kill -9` partway through, followed by a re-run, produced a file
 with the same SHA-256.
 
+## Tests
+
+```bash
+cargo test --workspace
+```
+
+The integration tests in [`tests/`](tests) run the engine against an axum
+mock server ([`rdm-tests`](tests/src)). It serves deterministic content, so
+any misplaced byte is caught, and it can inject faults:
+
+| Fault | What the engine must do |
+|---|---|
+| Ranges refused, or refused after the probe | Fall back to one stream; file exact |
+| Connections dropped mid-body (including chunked bodies) | Retry from the last written byte; never treat a cut as EOF |
+| A trickle of bytes and then a drop, on every connection | Give up after the retry limit instead of looping forever |
+| Stalled connection | Read timeout, then retry |
+| Latency | Tolerate it |
+| 429 / 503 with `Retry-After` (probe or segments) | Wait at least as long as asked; give up after the limit |
+| 404 | Fail immediately, without retrying |
+| `Content-Length` longer than the body | Never report completion |
+| Misaligned `Content-Range` | Reject it |
+| Size or content changes mid-download | `ResourceChanged`; the next run restarts from zero |
+| Redirect chain that sets cookies | Follow it and keep the cookies |
+| Required cookie / Referer / User-Agent / Basic auth | Send them on every connection |
+| HTTP proxy that requires auth | Route through the proxy with `Proxy-Authorization` |
+
+Every test has a deadline and avoids tight timing windows. The faults are
+also available as `mock-server` flags for manual testing:
+
+```bash
+cargo run -p rdm-tests --bin mock-server -- --size 64M --error 503:2:1 --drop-after 1M --drop-count 10
+```
+
 ## How the engine works
 
 - **Probe:** a `GET` with `Range: bytes=0-0`. A `206` reply gives the size
@@ -148,8 +182,8 @@ with the same SHA-256.
 - **Resource changes:** every range request carries `If-Range`, so a server
   whose file changed answers `200` rather than mixing old and new bytes.
 - **Retries:** exponential backoff with jitter, honouring `Retry-After`.
-  Counters are per connection and reset whenever that connection makes
-  progress.
+  Counters are per connection and reset only after an attempt that moved at
+  least 64 KiB.
 - **Throttling:** token buckets per download and global. A connection that
   is over its limit stops reading the socket, so the limit applies on the
   network, not just to disk writes.
@@ -185,8 +219,8 @@ Later phases add more prerequisites:
 |---|---|---|
 | 0 | Workspace, lints, CI, README | ✅ |
 | 1 | `rdm-core` engine + `rdm-cli` | ✅ |
-| 2 | Mock server fault injection + integration tests | ⏳ |
-| 3 | Tauri GUI, SQLite persistence, tray | |
+| 2 | Mock server fault injection + integration tests | ✅ |
+| 3 | Tauri GUI, SQLite persistence, tray | ⏳ |
 | 4 | MV3 extension + native messaging host | |
 | 5 | HLS/DASH + ffmpeg muxing | |
 | 6 | Scheduler, import/export, checksums, AV hook, duplicates, drag-and-drop | |

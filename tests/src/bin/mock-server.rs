@@ -2,6 +2,8 @@
 //!
 //! ```text
 //! mock-server [--port 8080] [--size 1G] [--rate 20M] [--no-ranges] [--seed N]
+//!             [--drop-after SIZE [--drop-count N]] [--latency MS]
+//!             [--error STATUS:COUNT[:RETRY_AFTER_SECS]]
 //! mock-server --verify FILE --size 1G [--seed N]
 //! ```
 //!
@@ -11,9 +13,10 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use rdm_tests::{MockConfig, MockServer, parse_size, verify_file};
+use rdm_tests::{ErrorFault, MockConfig, MockServer, parse_size, verify_file};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -32,11 +35,19 @@ async fn main() -> Result<()> {
             }
             "--seed" => config.seed = value()?.parse()?,
             "--no-ranges" => config.ranges = false,
+            "--drop-after" => {
+                config.faults.drop_after = Some(parse_size(&value()?).context("bad --drop-after")?)
+            }
+            "--drop-count" => config.faults.body_fault_limit = Some(value()?.parse()?),
+            "--latency" => config.faults.latency = Some(Duration::from_millis(value()?.parse()?)),
+            "--error" => config.faults.error = Some(parse_error(&value()?)?),
             "--verify" => verify = Some(value()?.into()),
             "-h" | "--help" => {
                 println!(
                     "mock-server [--port N] [--size SIZE] [--rate SIZE/s per connection] \
-                     [--no-ranges] [--seed N]\nmock-server --verify FILE --size SIZE [--seed N]"
+                     [--no-ranges] [--seed N] [--drop-after SIZE [--drop-count N]] \
+                     [--latency MS] [--error STATUS:COUNT[:RETRY_AFTER]]\n\
+                     mock-server --verify FILE --size SIZE [--seed N]"
                 );
                 return Ok(());
             }
@@ -72,4 +83,16 @@ async fn main() -> Result<()> {
         server.peak_connections()
     );
     Ok(())
+}
+
+/// `STATUS:COUNT[:RETRY_AFTER]`, e.g. `503:3:2`.
+fn parse_error(s: &str) -> Result<ErrorFault> {
+    let mut parts = s.split(':');
+    let status = parts.next().context("missing status")?.parse()?;
+    let count = parts.next().context("missing count")?.parse()?;
+    let mut fault = ErrorFault::first(status, count);
+    if let Some(secs) = parts.next() {
+        fault = fault.retry_after(secs.parse()?);
+    }
+    Ok(fault)
 }

@@ -25,6 +25,12 @@ use crate::writer::OutputFile;
 /// Buffered bytes per worker before a positioned write.
 const FLUSH_BYTES: usize = 512 * 1024;
 
+/// A failed attempt that still transferred at least this much resets the
+/// connection's failure count. Any smaller threshold would let a server
+/// that drops every connection after a few bytes keep a download looping
+/// for millions of requests instead of failing.
+const RETRY_RESET_PROGRESS: u64 = 64 * 1024;
+
 /// Requested lifecycle, driven by the [`DownloadHandle`](crate::DownloadHandle).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Control {
@@ -689,7 +695,7 @@ async fn download_segment(
     let policy = &t.ctx.spec.retry;
     let mut failures = 0;
     loop {
-        let before = t.map().bounds(id).map(|(cursor, _)| cursor);
+        let before = t.map().bounds(id).map_or(0, |(cursor, _)| cursor);
         let err = match fetch_range(t, id, rx, buf).await {
             Ok(end) => return Ok(end),
             Err(e) => e,
@@ -703,8 +709,8 @@ async fn download_segment(
         if !err.is_retryable() {
             return Err(err);
         }
-        if Some(cursor) != before {
-            failures = 0; // made progress since the last failure
+        if cursor.saturating_sub(before) >= RETRY_RESET_PROGRESS {
+            failures = 0; // this attempt got somewhere before failing
         }
         failures += 1;
         if failures > policy.max_retries {

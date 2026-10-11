@@ -8,9 +8,10 @@ const MAX_RETRY_AFTER: Duration = Duration::from_secs(300);
 
 /// How transient failures are retried.
 ///
-/// Failures are counted per connection and reset whenever that connection
-/// makes progress, so a long download over a flaky link is not killed by
-/// the total number of hiccups, only by `max_retries` failures in a row.
+/// Failures are counted per connection and reset whenever an attempt
+/// transferred a meaningful amount (64 KiB) before failing, so a long
+/// download over a flaky link is not killed by the total number of hiccups,
+/// only by `max_retries` failures in a row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RetryPolicy {
     /// Consecutive failures tolerated before giving up.
