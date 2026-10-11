@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Generates the rdm app icons (PNG, ICO, ICNS) with the standard library only.
+"""Generates the rdm app and extension icons (PNG, ICO, ICNS) with the
+standard library only.
 
 The icon is a blue rounded square with a white "download into tray" glyph.
 Run from the repository root:  python3 scripts/make-icons.py
@@ -10,6 +11,7 @@ import zlib
 from pathlib import Path
 
 OUT = Path("crates/rdm-gui/icons")
+EXT_OUT = Path("extension/icons")
 BASE = 512
 SS = 3  # supersampling per axis
 
@@ -136,7 +138,11 @@ def main():
         icns([(b"icp4", pngs[16]), (b"icp5", pngs[32]), (b"icp6", pngs[64]),
               (b"ic07", pngs[128]), (b"ic08", pngs[256]), (b"ic09", pngs[512])])
     )
-    print("icons written to", OUT)
+    EXT_OUT.mkdir(parents=True, exist_ok=True)
+    for size in (16, 32, 128):
+        (EXT_OUT / f"{size}.png").write_bytes(pngs[size])
+    (EXT_OUT / "48.png").write_bytes(png(render(48), 48))
+    print("icons written to", OUT, "and", EXT_OUT)
 
 
 if __name__ == "__main__":

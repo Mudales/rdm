@@ -5,11 +5,15 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use rdm_host::install::{Browser, BrowserStatus, Installer};
+use rdm_ipc::AddItem;
 use rdm_manager::{
     DownloadRecord, Id, LiveProgress, Manager, NewDownload, ProbeResult, QueueState, Settings,
     error_chain,
 };
 use tauri::{AppHandle, State};
+
+use crate::PendingAdds;
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -126,4 +130,61 @@ pub async fn pick_folder(app: AppHandle, start: Option<PathBuf>) -> CmdResult<Op
     Ok(dialog
         .blocking_pick_folder()
         .and_then(|p| p.into_path().ok()))
+}
+
+/// Add requests from the browser or clipboard waiting for confirmation.
+#[tauri::command]
+pub fn take_pending_adds(pending: State<'_, PendingAdds>) -> Vec<AddItem> {
+    std::mem::take(&mut *pending.0.lock().unwrap_or_else(|e| e.into_inner()))
+}
+
+fn installer() -> CmdResult<Installer> {
+    let host = rdm_host::install::sibling_host_path().map_err(msg)?;
+    if !host.is_file() {
+        return Err(format!(
+            "rdm-host was not found next to the app ({}). Reinstall rdm, or build it \
+             with `cargo build -p rdm-host` when running from source.",
+            host.display()
+        ));
+    }
+    Installer::new(host).map_err(msg)
+}
+
+fn browsers(
+    browser: Option<String>,
+    installer: &Installer,
+    only_detected: bool,
+) -> CmdResult<Vec<Browser>> {
+    match browser {
+        Some(b) => Ok(vec![Browser::parse(&b).map_err(msg)?]),
+        None => Ok(Browser::ALL
+            .into_iter()
+            .filter(|b| !only_detected || installer.detected(*b))
+            .collect()),
+    }
+}
+
+#[tauri::command]
+pub fn browser_integration_status() -> CmdResult<Vec<BrowserStatus>> {
+    Ok(installer()?.status())
+}
+
+/// Registers the native messaging host with one browser, or with every
+/// browser found on this system.
+#[tauri::command]
+pub fn install_browser_integration(browser: Option<String>) -> CmdResult<Vec<BrowserStatus>> {
+    let installer = installer()?;
+    for b in browsers(browser, &installer, true)? {
+        installer.install(b).map_err(msg)?;
+    }
+    Ok(installer.status())
+}
+
+#[tauri::command]
+pub fn uninstall_browser_integration(browser: Option<String>) -> CmdResult<Vec<BrowserStatus>> {
+    let installer = installer()?;
+    for b in browsers(browser, &installer, false)? {
+        installer.uninstall(b).map_err(msg)?;
+    }
+    Ok(installer.status())
 }

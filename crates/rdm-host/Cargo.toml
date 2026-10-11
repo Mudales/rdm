@@ -1,6 +1,6 @@
 [package]
 name = "rdm-host"
-description = "Native Messaging host bridging the rdm browser extension and the rdm app."
+description = "Native messaging host for the rdm browser extension, and its per-browser installer."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,10 +8,30 @@ repository.workspace = true
 authors.workspace = true
 publish = false
 
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "rdm-host"
+path = "src/main.rs"
+
 [dependencies]
 anyhow.workspace = true
+dirs.workspace = true
+rdm-ipc.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "io-std", "io-util", "time", "macros"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+winreg = "0.56"
+
+[dev-dependencies]
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "process"] }
 
 [lints]
 workspace = true

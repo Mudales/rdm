@@ -24,6 +24,9 @@ pub struct Settings {
     pub proxy: ProxySetting,
     /// Closing the window hides it to the system tray instead of quitting.
     pub close_to_tray: bool,
+    /// Offer to download http(s) links to known file types that are copied
+    /// to the clipboard.
+    pub clipboard_monitoring: bool,
     pub categories: Vec<Category>,
     pub queues: Vec<Queue>,
 }
@@ -110,6 +113,7 @@ impl Settings {
             global_speed_limit: None,
             proxy: ProxySetting::System,
             close_to_tray: true,
+            clipboard_monitoring: true,
             categories,
             queues: vec![Queue {
                 id: MAIN_QUEUE,
@@ -207,6 +211,31 @@ impl Settings {
             .map_or_else(|| self.default_directory.clone(), |c| c.directory.clone())
     }
 
+    /// Whether `text` is a single http(s) URL whose file extension belongs
+    /// to a category (catch-all categories do not count). Used to decide
+    /// whether a copied link looks like a download.
+    pub fn is_download_url(&self, text: &str) -> bool {
+        let text = text.trim();
+        if text.is_empty() || text.len() > 4096 || text.contains(char::is_whitespace) {
+            return false;
+        }
+        let Ok(url) = rdm_core::Url::parse(text) else {
+            return false;
+        };
+        if !matches!(url.scheme(), "http" | "https") {
+            return false;
+        }
+        let Some(ext) = url
+            .path_segments()
+            .and_then(|mut s| s.next_back())
+            .and_then(|last| Path::new(last).extension())
+            .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        else {
+            return false;
+        };
+        self.categories.iter().any(|c| c.extensions.contains(&ext))
+    }
+
     pub(crate) fn proxy_config(&self) -> rdm_core::ProxyConfig {
         match &self.proxy {
             ProxySetting::System => rdm_core::ProxyConfig::System,
@@ -260,6 +289,30 @@ mod tests {
         let mut bad = s;
         bad.queues[0].max_concurrent = 0;
         assert!(bad.validated().is_err());
+    }
+
+    #[test]
+    fn download_url_detection() {
+        let s = Settings::with_directory(Path::new("/dl"));
+        for yes in [
+            "https://example.com/files/setup.exe",
+            "  http://x.org/a/b/movie.MKV?token=1#t  ",
+            "https://cdn.example.com/archive.tar.gz",
+        ] {
+            assert!(s.is_download_url(yes), "{yes}");
+        }
+        for no in [
+            "https://example.com/",
+            "https://example.com/page.html",
+            "https://example.com/readme",
+            "ftp://example.com/file.zip",
+            "file:///etc/passwd.zip",
+            "see https://example.com/file.zip",
+            "https://example.com/a.zip\nhttps://example.com/b.zip",
+            "not a url.zip",
+        ] {
+            assert!(!s.is_download_url(no), "{no}");
+        }
     }
 
     #[test]

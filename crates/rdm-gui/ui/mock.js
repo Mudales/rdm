@@ -17,6 +17,7 @@ let settings = {
   globalSpeedLimit: null,
   proxy: { mode: 'system' },
   closeToTray: true,
+  clipboardMonitoring: true,
   categories: [
     ['Video', 'mp4 mkv webm avi mov'],
     ['Music', 'mp3 m4a flac wav ogg'],
@@ -207,7 +208,37 @@ const commands = {
   open_file: () => {},
   show_in_folder: () => {},
   pick_folder: () => `${home}/Picked`,
+  take_pending_adds: () => pending.splice(0),
+  browser_integration_status: () => browsers.map((b) => ({ ...b })),
+  install_browser_integration: ({ browser }) => {
+    browsers.filter((b) => (browser ? b.browser === browser : b.detected)).forEach((b) => Object.assign(b, { installed: true, current: true }));
+    return browsers.map((b) => ({ ...b }));
+  },
+  uninstall_browser_integration: ({ browser }) => {
+    browsers.filter((b) => !browser || b.browser === browser).forEach((b) => Object.assign(b, { installed: false, current: false }));
+    return browsers.map((b) => ({ ...b }));
+  },
 };
+
+const browsers = [
+  ['chrome', 'Chrome', true],
+  ['chromium', 'Chromium', false],
+  ['edge', 'Edge', true],
+  ['brave', 'Brave', false],
+  ['firefox', 'Firefox', true],
+].map(([browser, name, detected]) => ({ browser, name, detected, installed: false, current: false, manifestPath: `/mock/${browser}/dev.rdm.host.json` }));
+
+// Simulate the browser extension sending a video a few seconds after load.
+const pending = [];
+setTimeout(() => {
+  pending.push({
+    url: 'https://videos.example.com/media/talk-2026.mp4',
+    referer: 'https://videos.example.com/watch?v=42',
+    userAgent: navigator.userAgent,
+    cookies: 'session=abc123',
+  });
+  emit('rdm://add-request', null);
+}, 3000);
 
 export const backend = {
   async invoke(cmd, args = {}) {

@@ -470,6 +470,14 @@ impl Manager {
         Ok(())
     }
 
+    /// Shows a message to the user (as a [`ManagerEvent::Notice`]).
+    pub fn notice(&self, message: impl Into<String>) {
+        self.inner.emit(ManagerEvent::Notice {
+            id: None,
+            message: message.into(),
+        });
+    }
+
     /// Stops every download (keeping progress) and waits for them to save
     /// their state, up to a few seconds. Call before the process exits.
     pub async fn shutdown(&self) {

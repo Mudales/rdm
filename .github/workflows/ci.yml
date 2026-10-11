@@ -52,6 +52,20 @@ jobs:
       - name: Test
         run: cargo test --workspace --all-features --locked
 
+  extension:
+    name: extension tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+      - name: Unit tests (lib/detect.js)
+        run: node --test extension/test/
+      - name: Manifest is valid JSON
+        run: node -e "JSON.parse(require('fs').readFileSync('extension/manifest.json', 'utf8'))"
+
   guards:
     name: dependency guards
     runs-on: ubuntu-latest

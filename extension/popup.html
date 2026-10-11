@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>rdm</title>
+  <link rel="stylesheet" href="popup.css">
+  <script type="module" src="popup.js"></script>
+</head>
+<body>
+  <header>
+    <img src="icons/32.png" alt="" width="20" height="20">
+    <strong>rdm</strong>
+    <span id="status" class="status">Checking…</span>
+  </header>
+
+  <section id="permission" hidden>
+    <p>rdm needs access to websites to detect videos and send cookies with downloads.</p>
+    <button id="grant" class="primary">Allow access to websites</button>
+  </section>
+
+  <section>
+    <h2>Media on this page</h2>
+    <ul id="media" class="list"></ul>
+    <p id="media-empty" class="hint">Nothing detected yet. Start playing a video, then open this again.</p>
+  </section>
+
+  <section>
+    <h2>Download links on this page</h2>
+    <div class="kinds" id="kinds"></div>
+    <label class="field">Other extensions <input id="exts" type="text" placeholder="e.g. srt, torrent" spellcheck="false"></label>
+    <label class="check"><input id="same-host" type="checkbox"> Only links on this site</label>
+    <div class="row">
+      <span id="link-count" class="hint"></span>
+      <button id="add-links" class="primary" disabled>Add to queue</button>
+    </div>
+  </section>
+
+  <section>
+    <h2>Settings</h2>
+    <label class="check"><input id="capture" type="checkbox"> Send browser downloads to rdm</label>
+    <p class="hint indent">Alt+click a link to let the browser download it instead.</p>
+    <label class="check"><input id="video-button" type="checkbox"> Show a Download button on videos</label>
+  </section>
+
+  <p id="message" class="message" role="status"></p>
+</body>
+</html>

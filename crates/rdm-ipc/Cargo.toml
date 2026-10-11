@@ -1,0 +1,25 @@
+[package]
+name = "rdm-ipc"
+description = "Local IPC between rdm's native messaging host and the rdm app."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+
+[dependencies]
+dirs.workspace = true
+interprocess = { version = "2.4", features = ["tokio"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "io-util", "time", "sync", "macros", "net"] }
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
+interprocess = { version = "2.4", features = ["tokio"] }
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
+
+[lints]
+workspace = true

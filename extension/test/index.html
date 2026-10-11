@@ -1,0 +1,29 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>rdm extension tests</title>
+<style>body{font:14px system-ui;margin:2em} .pass{color:#15803d} .fail{color:#b91c1c} pre{white-space:pre-wrap}</style>
+<h1>rdm extension tests</h1>
+<p id="summary">Running…</p>
+<ul id="results"></ul>
+<script type="module">
+  // Browser runner for the same cases Node runs in CI. Serve the extension
+  // folder over HTTP and open test/index.html.
+  import { cases } from './cases.mjs';
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  const t = {
+    equal(a, b) { if (a !== b) throw new Error(`expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`); },
+    deepEqual(a, b) { if (!same(a, b)) throw new Error(`expected ${JSON.stringify(b)}, got ${JSON.stringify(a)}`); },
+    ok(v) { if (!v) throw new Error('expected a truthy value'); },
+  };
+  let failed = 0;
+  for (const [name, fn] of cases) {
+    const li = document.createElement('li');
+    try { fn(t); li.className = 'pass'; li.textContent = `✓ ${name}`; }
+    catch (e) { failed++; li.className = 'fail'; li.textContent = `✗ ${name}: ${e.message}`; }
+    document.querySelector('#results').append(li);
+  }
+  const summary = document.querySelector('#summary');
+  summary.textContent = `${cases.length - failed} passed, ${failed} failed`;
+  summary.className = failed ? 'fail' : 'pass';
+  document.title = failed ? 'FAIL' : 'PASS';
+</script>

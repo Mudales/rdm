@@ -4,6 +4,7 @@ members = [
     "crates/rdm-core",
     "crates/rdm-media",
     "crates/rdm-manager",
+    "crates/rdm-ipc",
     "crates/rdm-cli",
     "crates/rdm-host",
     "crates/rdm-gui",
@@ -24,6 +25,8 @@ authors = ["rdm contributors"]
 rdm-core = { path = "crates/rdm-core" }
 rdm-media = { path = "crates/rdm-media" }
 rdm-manager = { path = "crates/rdm-manager" }
+rdm-ipc = { path = "crates/rdm-ipc" }
+rdm-host = { path = "crates/rdm-host" }
 
 rdm-tests = { path = "tests" }
 

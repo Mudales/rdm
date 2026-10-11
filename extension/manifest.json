@@ -1,0 +1,52 @@
+{
+  "manifest_version": 3,
+  "name": "rdm — Rust Download Manager",
+  "short_name": "rdm",
+  "version": "0.1.0",
+  "description": "Send downloads, videos and links to the rdm download manager.",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxSjAvKlLO6mBKikNeDCnZ53aJgIVb07xC2419Suru/bwSvWBPtsNfpZ3VvSI8bF1JB7i96reuMjPhlfGstDkulRQNtObtOB+ZbsME3R1Pr/grUazpUAN5C/FFC8uB4cBPe8WnmhFiN6chVCbQxysttkBE5ipmiFBRwmjqJy5jCgYt0rTEzgTYZtC2F81WlA5W6sllXSxUe+bC8VKBsngXb4PrduIYn7LSEikwlUUN7MxNI4tJpa3SJByF87iDkt3rXzsZpmddbxE05SJhsG2pTzld2nSV87I3Dc1aVtwgcEjT1U3tWIQygGRCaxPypm83nbyN2CyaiSTMyrPnnm1xQIDAQAB",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "rdm@rdm.dev",
+      "strict_min_version": "128.0"
+    }
+  },
+  "permissions": [
+    "nativeMessaging",
+    "webRequest",
+    "downloads",
+    "cookies",
+    "storage",
+    "contextMenus"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js",
+    "scripts": ["background.js"],
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://*/*", "https://*/*"],
+      "js": ["content.js"],
+      "all_frames": true,
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "rdm",
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  }
+}

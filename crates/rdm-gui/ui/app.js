@@ -649,13 +649,22 @@ function fillSelect(select, items, value) {
   select.value = String(value);
 }
 
-function openAdd(url = '') {
+/**
+ * Opens the Add dialog, optionally prefilled from the browser extension or
+ * the clipboard: `{ url, fileName, referer, pageUrl, userAgent, cookies }`.
+ */
+function openAdd(prefill = {}) {
   const s = state.settings;
+  const url = prefill.url ?? '';
   add.dirTouched = false;
-  add.nameTouched = false;
+  add.nameTouched = !!prefill.fileName;
   add.probeToken++;
   $('#form-add').reset();
   $('#add-url').value = url;
+  $('#add-name').value = prefill.fileName ?? '';
+  $('#add-referer').value = prefill.referer ?? prefill.pageUrl ?? '';
+  $('#add-ua').value = prefill.userAgent ?? '';
+  $('#add-cookies').value = prefill.cookies ?? '';
   $('#add-error').textContent = '';
   setProbeInfo('');
   fillSelect($('#add-category'), [['', 'Automatic (by extension)'], ...s.categories.map((c) => [c.id, c.name])], '');
@@ -741,6 +750,22 @@ $('#add-browse').addEventListener('click', async () => {
   }
 });
 $('#add-cancel').addEventListener('click', () => $('#dlg-add').close());
+// Show the next waiting browser/clipboard request once this one is done.
+$('#dlg-add').addEventListener('close', () => setTimeout(showNextPending, 0));
+
+const pendingAdds = [];
+async function drainPending() {
+  try {
+    pendingAdds.push(...(await backend.invoke('take_pending_adds')));
+  } catch {
+    return;
+  }
+  showNextPending();
+}
+function showNextPending() {
+  if ($('#dlg-add').open || !pendingAdds.length || !state.settings) return;
+  openAdd(pendingAdds.shift());
+}
 
 async function submitAdd(start) {
   const request = addRequest(start);
@@ -881,6 +906,9 @@ function openSettings() {
   draft = structuredClone(state.settings);
   $('#set-dir').value = draft.defaultDirectory;
   $('#set-tray').checked = draft.closeToTray;
+  $('#set-clipboard').checked = draft.clipboardMonitoring;
+  $('#set-browsers-error').textContent = '';
+  refreshBrowsers();
   $('#set-conns').value = draft.connections;
   $('#set-split').value = Math.round(draft.minSplit / 1024);
   $('#set-limit').value = draft.globalSpeedLimit ? Math.round(draft.globalSpeedLimit / 1024) : 0;
@@ -894,6 +922,44 @@ function openSettings() {
 }
 
 $('#set-cancel').addEventListener('click', () => $('#dlg-settings').close());
+
+function renderBrowsers(list) {
+  $('#set-browsers').replaceChildren(
+    ...list.map((b) => {
+      const state = b.installed
+        ? b.current
+          ? ['Registered', true]
+          : ['Registered to another copy of rdm', false]
+        : [b.detected ? 'Not registered' : 'Not registered (browser not found)', false];
+      return h(
+        'div',
+        { class: 'item' },
+        h('strong', { text: b.name }),
+        h('span', { class: `state${state[1] ? ' ok' : ''}`, text: state[0], title: b.manifestPath }),
+        b.installed && b.current
+          ? h('button', { type: 'button', text: 'Remove', onclick: () => browserAction('uninstall_browser_integration', b.browser) })
+          : h('button', { type: 'button', text: 'Register', onclick: () => browserAction('install_browser_integration', b.browser) }),
+      );
+    }),
+  );
+}
+async function refreshBrowsers() {
+  try {
+    renderBrowsers(await backend.invoke('browser_integration_status'));
+  } catch (e) {
+    $('#set-browsers').replaceChildren();
+    $('#set-browsers-error').textContent = errorText(e);
+  }
+}
+async function browserAction(cmd, browser) {
+  $('#set-browsers-error').textContent = '';
+  try {
+    renderBrowsers(await backend.invoke(cmd, { browser }));
+  } catch (e) {
+    $('#set-browsers-error').textContent = errorText(e);
+  }
+}
+$('#set-browsers-install').addEventListener('click', () => browserAction('install_browser_integration', null));
 $('#form-settings').addEventListener('submit', async (e) => {
   e.preventDefault();
   const mode = $('input[name=proxy]:checked')?.value ?? 'system';
@@ -902,6 +968,7 @@ $('#form-settings').addEventListener('submit', async (e) => {
     ...draft,
     defaultDirectory: $('#set-dir').value.trim(),
     closeToTray: $('#set-tray').checked,
+    clipboardMonitoring: $('#set-clipboard').checked,
     connections: Number($('#set-conns').value),
     minSplit: Number($('#set-split').value) * 1024,
     globalSpeedLimit: limit > 0 ? limit * 1024 : null,
@@ -976,5 +1043,7 @@ async function loadAll() {
 readPalette();
 await backend.listen('rdm://event', handleEvent);
 await backend.listen('rdm://resync', loadAll);
+await backend.listen('rdm://add-request', drainPending);
 await loadAll();
+await drainPending();
 new ResizeObserver(() => scheduleRender()).observe($('#table-wrap'));

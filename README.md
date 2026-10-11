@@ -4,9 +4,10 @@ A cross-platform (macOS, Windows, Linux) download manager written in Rust,
 inspired by Internet Download Manager and
 [ab-download-manager](https://github.com/amir1376/ab-download-manager).
 
-> **Status:** Phases 1–3 done: the download engine (`rdm-core`), the
-> headless `rdm` CLI, and the desktop app (`rdm-gui`, backed by
-> `rdm-manager`). Browser integration and streaming media come next.
+> **Status:** Phases 1–4 done: the download engine (`rdm-core`), the
+> headless `rdm` CLI, the desktop app (`rdm-gui`, backed by `rdm-manager`)
+> and browser integration (extension, `rdm-host`, `rdm-ipc`). Streaming
+> media (HLS/DASH) comes next.
 > See [Roadmap](#roadmap).
 
 ## Architecture
@@ -34,7 +35,7 @@ flowchart LR
     DISK[("output file<br/>+ .rdm sidecar")]
 
     EXT <-- "native messaging" --> HOST
-    HOST <-- "local IPC" --> GUI
+    HOST <-- "rdm-ipc<br/>(Unix socket / named pipe)" --> GUI
     GUI --> MGR
     MGR --> MEDIA
     MGR --> CORE
@@ -55,9 +56,10 @@ library. CI enforces this with [`scripts/check-deps.sh`](scripts/check-deps.sh).
 | `crates/rdm-manager` | lib | The download list: SQLite persistence, queues with concurrency limits, categories with folders, settings, change events. No GUI dependency |
 | `crates/rdm-media` | lib | HLS/DASH manifest parsing, segment download, ffmpeg muxing, AES-128 HLS |
 | `crates/rdm-cli` | bin `rdm` | Headless front end, used to test the engine without a GUI |
-| `crates/rdm-host` | bin `rdm-host` | Native messaging host, plus manifest installer for Chrome, Edge and Firefox |
+| `crates/rdm-ipc` | lib | Messages, length-prefixed JSON framing, and a private local socket (Unix) or named pipe (Windows) between `rdm-host` and the app |
+| `crates/rdm-host` | bin `rdm-host` + lib | Native messaging host, launching the app on demand, and the per-browser manifest installer (Chrome, Chromium, Edge, Brave, Firefox; registry on Windows) |
 | `crates/rdm-gui` | bin `rdm-gui` | Tauri v2 desktop app: commands over `rdm-manager`, plain HTML/CSS/JS UI in `ui/` (no build step) |
-| `extension/` | MV3 | Browser extension |
+| `extension/` | MV3 | Browser extension (plain JS): media detection, video Download button, download capture, download-all-links. See [extension/README.md](extension/README.md) |
 | `tests/` | crate `rdm-tests` | axum mock server and integration tests |
 
 ## Building
@@ -109,6 +111,13 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
   to disk.
 - **Tray and window:** a tray icon, close to tray, and a single running
   instance (launching again focuses the open window).
+- **Browser integration:** Settings → Browser registers `rdm-host` with
+  the browsers on this machine. Requests from the extension open the Add
+  dialog prefilled (single item) or go into the queue (download all links).
+  See [extension/README.md](extension/README.md).
+- **Clipboard monitoring:** copying an http(s) link to a known file type
+  offers to download it, so rdm still works without the extension. It can
+  be turned off in Settings.
 
 ## Using the CLI
 
@@ -235,7 +244,6 @@ python3 -m http.server 5174 --directory crates/rdm-gui/ui
 ```
 
 Later phases add more prerequisites:
-- **Phase 4 (extension):** Node.js, if the extension is written in TypeScript.
 - **Phase 5 (media):** ffmpeg on `PATH`. If it's missing, rdm offers to
   download it.
 
@@ -262,8 +270,8 @@ Later phases add more prerequisites:
 | 1 | `rdm-core` engine + `rdm-cli` | ✅ |
 | 2 | Mock server fault injection + integration tests | ✅ |
 | 3 | Tauri GUI, SQLite persistence, tray | ✅ |
-| 4 | MV3 extension + native messaging host | ⏳ |
-| 5 | HLS/DASH + ffmpeg muxing | |
+| 4 | MV3 extension + native messaging host | ✅ |
+| 5 | HLS/DASH + ffmpeg muxing | ⏳ |
 | 6 | Scheduler, import/export, checksums, AV hook, duplicates, drag-and-drop | |
 | 7 | Packaging, signing docs, v0.1.0 release | |
 

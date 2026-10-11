@@ -7,13 +7,16 @@
 // No console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod clipboard;
 mod commands;
+mod ipc;
 mod tray;
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::Context;
 use rdm_core::EngineConfig;
+use rdm_ipc::AddItem;
 use rdm_manager::Manager;
 use tauri::async_runtime::block_on;
 use tauri::{AppHandle, Emitter, Manager as _, RunEvent, WindowEvent};
@@ -24,6 +27,28 @@ use tracing_subscriber::EnvFilter;
 const EVENT: &str = "rdm://event";
 /// Tells the UI it missed events and should reload the full state.
 const RESYNC: &str = "rdm://resync";
+/// Tells the UI that add requests (from the browser or the clipboard) are
+/// waiting; it fetches them with the `take_pending_adds` command.
+pub(crate) const ADD_REQUEST: &str = "rdm://add-request";
+
+/// Add requests waiting for the UI. Kept here rather than sent as event
+/// payloads so that a request arriving before the web UI has loaded (e.g.
+/// the browser just launched the app) is not lost.
+#[derive(Default)]
+pub(crate) struct PendingAdds(pub Mutex<Vec<AddItem>>);
+
+/// Queues an add request for confirmation in the UI and brings it forward.
+pub(crate) fn request_add(app: &AppHandle, item: AddItem) {
+    if let Some(pending) = app.try_state::<PendingAdds>() {
+        pending
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(item);
+    }
+    show_main_window(app);
+    let _ = app.emit(ADD_REQUEST, ());
+}
 
 fn main() {
     tracing_subscriber::fmt()
@@ -46,6 +71,8 @@ fn run() -> anyhow::Result<()> {
         }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_clipboard_manager::init())
+        .manage(PendingAdds::default())
         .setup(|app| {
             let data_dir = app
                 .path()
@@ -55,6 +82,15 @@ fn run() -> anyhow::Result<()> {
                 .with_context(|| format!("cannot open the database in {}", data_dir.display()))?;
             let manager = Arc::new(manager);
             forward_events(app.handle().clone(), &manager);
+            match block_on(ipc::start(app.handle().clone(), manager.clone())) {
+                Ok(server) => {
+                    app.manage(ipc::IpcServer(server));
+                }
+                // The browser extension will not reach this instance, but
+                // everything else works.
+                Err(e) => tracing::warn!("browser integration unavailable: {e}"),
+            }
+            clipboard::spawn(app.handle().clone(), manager.clone());
             app.manage(manager);
             tray::create(app.handle())?;
             Ok(())
@@ -87,6 +123,10 @@ fn run() -> anyhow::Result<()> {
             commands::open_file,
             commands::show_in_folder,
             commands::pick_folder,
+            commands::take_pending_adds,
+            commands::browser_integration_status,
+            commands::install_browser_integration,
+            commands::uninstall_browser_integration,
         ])
         .build(tauri::generate_context!())
         .context("failed to start the user interface")?;

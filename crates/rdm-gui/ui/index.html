@@ -154,6 +154,7 @@
         <button type="button" role="tab" data-tab="connection">Connection</button>
         <button type="button" role="tab" data-tab="categories">Categories</button>
         <button type="button" role="tab" data-tab="queues">Queues</button>
+        <button type="button" role="tab" data-tab="browser">Browser</button>
       </div>
 
       <section class="tab" data-tab="general">
@@ -201,6 +202,17 @@
         <p class="hint">"Add to queue" downloads wait in their queue and start when the queue is started, a few at a time.</p>
         <div class="list-editor" id="set-queues"></div>
         <button type="button" id="set-add-queue">Add queue</button>
+      </section>
+
+      <section class="tab" data-tab="browser" hidden>
+        <label class="check"><input type="checkbox" id="set-clipboard"> Offer to download links to known file types when they are copied</label>
+        <h3 class="subhead">Browser extension</h3>
+        <p class="hint">The rdm extension sends links, videos and captured downloads to this app through a small helper (rdm-host). Register the helper with your browsers, then install the extension.</p>
+        <div class="list-editor browsers" id="set-browsers" aria-live="polite"></div>
+        <div class="row">
+          <button type="button" id="set-browsers-install">Register with all detected browsers</button>
+        </div>
+        <p class="error" id="set-browsers-error" role="alert"></p>
       </section>
 
       <p class="error" id="set-error" role="alert"></p>

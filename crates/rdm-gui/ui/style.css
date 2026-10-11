@@ -271,6 +271,10 @@ details.advanced[open] { display: flex; flex-direction: column; gap: 10px; }
 .list-editor .item { display: grid; gap: 6px; align-items: center; }
 .list-editor.categories .item { grid-template-columns: 120px 1fr 1.2fr auto auto; }
 .list-editor.queues .item { grid-template-columns: 1fr 140px auto; }
+.list-editor.browsers .item { grid-template-columns: 110px 1fr auto; padding: 4px 0; }
+.list-editor.browsers .state { color: var(--muted); }
+.list-editor.browsers .state.ok { color: var(--done); }
+h3.subhead { margin: 8px 0 0; font-size: 13px; }
 .list-editor .item button { padding: 6px 8px; }
 
 /* Context menu */
