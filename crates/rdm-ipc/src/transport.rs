@@ -2,6 +2,7 @@
 
 use std::future::Future;
 use std::io;
+#[cfg(unix)]
 use std::path::PathBuf;
 use std::sync::Arc;
 
