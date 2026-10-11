@@ -112,7 +112,11 @@ impl Engine {
         })
     }
 
-    fn host_limiter(&self, key: &str) -> Arc<Semaphore> {
+    pub(crate) fn global_bucket(&self) -> &TokenBucket {
+        &self.inner.global
+    }
+
+    pub(crate) fn host_limiter(&self, key: &str) -> Arc<Semaphore> {
         let mut hosts = self.inner.hosts.lock().unwrap_or_else(|e| e.into_inner());
         hosts
             .entry(key.to_owned())

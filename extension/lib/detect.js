@@ -159,14 +159,14 @@ export function formatBytes(n) {
   return i === 0 ? `${n} B` : `${v.toFixed(v < 10 ? 1 : 0)} ${UNITS[i]}`;
 }
 
-/** Whether rdm can download this detected item yet. */
-export const isSupportedKind = (kind) => kind === 'video' || kind === 'audio';
+/** Whether rdm can download this detected item. */
+export const isSupportedKind = (kind) => ['video', 'audio', 'hls', 'dash'].includes(kind);
 
 /** Short human description of a detected item. */
 export function describe(item) {
   const label = { video: 'Video', audio: 'Audio', hls: 'HLS stream', dash: 'DASH stream' }[item.kind] ?? 'File';
   const parts = [label];
   if (item.size) parts.push(formatBytes(item.size));
-  if (item.contentType && isSupportedKind(item.kind)) parts.push(item.contentType);
+  if (item.contentType && (item.kind === 'video' || item.kind === 'audio')) parts.push(item.contentType);
   return parts.join(' · ');
 }

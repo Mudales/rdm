@@ -127,6 +127,8 @@ fn run() -> anyhow::Result<()> {
             commands::browser_integration_status,
             commands::install_browser_integration,
             commands::uninstall_browser_integration,
+            commands::ffmpeg_status,
+            commands::install_ffmpeg,
         ])
         .build(tauri::generate_context!())
         .context("failed to start the user interface")?;

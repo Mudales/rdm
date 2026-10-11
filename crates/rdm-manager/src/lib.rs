@@ -29,9 +29,10 @@ mod settings;
 mod store;
 
 pub use error::{Error, Result, error_chain};
-pub use manager::Manager;
+pub use manager::{FfmpegStatus, Manager};
 pub use model::{
     DownloadRecord, Id, LiveProgress, ManagerEvent, NewDownload, ProbeResult, QueueState,
-    StartMode, Status,
+    StartMode, Status, StreamChoice,
 };
+pub use rdm_media::{FfmpegConfig, Manifest, OutputFormat};
 pub use settings::{Category, MAIN_QUEUE, ProxySetting, Queue, Settings};

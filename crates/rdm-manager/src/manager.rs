@@ -10,6 +10,11 @@ use rdm_core::{
     Destination, DownloadControl, DownloadHandle, DownloadSpec, Engine, EngineConfig, Event,
     Outcome, Progress, Request, State as CoreState,
 };
+use rdm_media::{
+    Ffmpeg, FfmpegConfig, FfmpegSource, MediaControl, MediaEngine, MediaEvent, MediaHandle,
+    MediaJob, MediaOutcome, MediaProgress, OutputFormat,
+};
+use serde::Serialize;
 use tokio::runtime::Handle as Runtime;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
@@ -17,7 +22,7 @@ use tokio::task::JoinHandle;
 use crate::error::{Error, Result, error_chain};
 use crate::model::{
     DownloadRecord, Id, LiveProgress, ManagerEvent, NewDownload, ProbeResult, QueueState,
-    StartMode, Status,
+    StartMode, Status, StreamChoice,
 };
 use crate::settings::{MAIN_QUEUE, Settings};
 use crate::store::Store;
@@ -46,6 +51,8 @@ impl std::fmt::Debug for Manager {
 
 struct Inner {
     engine: Engine,
+    media: MediaEngine,
+    tools_dir: PathBuf,
     store: Store,
     runtime: Runtime,
     events: broadcast::Sender<ManagerEvent>,
@@ -65,9 +72,51 @@ struct State {
 }
 
 struct Active {
-    control: DownloadControl,
-    progress: Option<Progress>,
+    control: RunControl,
+    progress: Option<LiveProgress>,
     then: AfterStop,
+}
+
+/// Control for either kind of running download.
+enum RunControl {
+    File(DownloadControl),
+    Stream(MediaControl),
+}
+
+impl RunControl {
+    fn stop(&self) {
+        match self {
+            RunControl::File(c) => c.stop(),
+            RunControl::Stream(c) => c.stop(),
+        }
+    }
+
+    fn cancel(&self) {
+        match self {
+            RunControl::File(c) => c.cancel(),
+            RunControl::Stream(c) => c.cancel(),
+        }
+    }
+}
+
+/// How a running download ended, for either kind.
+enum Finished {
+    Completed { size: u64, path: Option<PathBuf> },
+    Stopped { downloaded: Option<u64> },
+    Cancelled,
+    Failed(String),
+}
+
+/// Where ffmpeg stands, for the settings screen.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FfmpegStatus {
+    pub path: Option<PathBuf>,
+    pub version: Option<String>,
+    /// A static build rdm can download on this platform (after consent).
+    pub download: Option<FfmpegSource>,
+    /// How to install it otherwise.
+    pub hint: String,
 }
 
 /// What to do once a running download's task ends because we stopped it.
@@ -86,6 +135,16 @@ impl Manager {
     /// Downloads that were running when the app last exited become
     /// `Stopped`; nothing starts automatically.
     pub async fn open(data_dir: &Path, engine_config: EngineConfig) -> Result<Self> {
+        Self::open_with(data_dir, engine_config, FfmpegConfig::Auto).await
+    }
+
+    /// Like [`open`](Self::open), choosing how ffmpeg is found (tests use
+    /// [`FfmpegConfig::Disabled`]).
+    pub async fn open_with(
+        data_dir: &Path,
+        engine_config: EngineConfig,
+        ffmpeg: FfmpegConfig,
+    ) -> Result<Self> {
         let runtime = Runtime::try_current().map_err(|_| rdm_core::Error::NoRuntime)?;
         std::fs::create_dir_all(data_dir).map_err(Error::io(data_dir))?;
         let store = Store::open(&data_dir.join(DATABASE_FILE))?;
@@ -125,9 +184,13 @@ impl Manager {
             global_speed_limit: settings.global_speed_limit.and_then(NonZeroU64::new),
             ..engine_config
         });
+        let tools_dir = data_dir.join("tools");
+        let media = MediaEngine::new(engine.clone(), Ffmpeg::new(ffmpeg, Some(tools_dir.clone())));
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
         let inner = Arc::new(Inner {
             engine,
+            media,
+            tools_dir,
             store,
             runtime: runtime.clone(),
             events,
@@ -234,7 +297,13 @@ impl Manager {
                 new.cookies.as_deref(),
             )?
         };
+        if rdm_media::looks_like_stream(&new.url, None) {
+            return self.probe_stream(new, request).await;
+        }
         let info = self.inner.engine.probe(&request).await?;
+        if rdm_media::looks_like_stream(info.final_url.as_str(), info.content_type.as_deref()) {
+            return self.probe_stream(new, request).await;
+        }
         let st = self.inner.state();
         let name = new
             .file_name
@@ -251,16 +320,76 @@ impl Manager {
             content_type: info.content_type,
             category_id,
             directory,
+            stream: None,
         })
+    }
+
+    async fn probe_stream(&self, new: &NewDownload, request: Request) -> Result<ProbeResult> {
+        let manifest = self.inner.media.inspect(&request).await?;
+        if let Some(p) = &manifest.protection {
+            return Err(rdm_media::Error::Protected(p.clone()).into());
+        }
+        if manifest.live {
+            return Err(rdm_media::Error::Live.into());
+        }
+        let format = new.stream.as_ref().map(|c| c.format).unwrap_or_default();
+        let name = stream_file_name(new, format);
+        let st = self.inner.state();
+        let (file_name, category_id, directory) = placement(&st, new, &name);
+        Ok(ProbeResult {
+            url: request.url.to_string(),
+            final_url: manifest.url.clone(),
+            file_name,
+            size: None,
+            resumable: true,
+            content_type: Some(match manifest.kind {
+                rdm_media::StreamKind::Hls => "application/vnd.apple.mpegurl".into(),
+                rdm_media::StreamKind::Dash => "application/dash+xml".into(),
+            }),
+            category_id,
+            directory,
+            stream: Some(manifest),
+        })
+    }
+
+    /// ffmpeg's location and version, and whether rdm can download it.
+    pub async fn ffmpeg_status(&self) -> FfmpegStatus {
+        let path = self.inner.media.ffmpeg().locate();
+        let version = match &path {
+            Some(p) => Ffmpeg::version(p).await.ok(),
+            None => None,
+        };
+        FfmpegStatus {
+            path,
+            version,
+            download: rdm_media::ffmpeg_source(),
+            hint: rdm_media::install_hint().into(),
+        }
+    }
+
+    /// Downloads a static ffmpeg build into rdm's tools folder. Only call
+    /// this after the user agreed (the UI shows the source and license).
+    pub async fn install_ffmpeg(&self) -> Result<FfmpegStatus> {
+        rdm_media::install_ffmpeg(&self.inner.engine, &self.inner.tools_dir).await?;
+        Ok(self.ffmpeg_status().await)
     }
 
     /// Adds a download. Without a `file_name` the URL is probed first to get
     /// the server's name for it.
-    pub async fn add(&self, new: NewDownload) -> Result<DownloadRecord> {
-        let (name, size) = match &new.file_name {
-            Some(name) => (rdm_core::sanitize_filename(name), None),
-            None => {
+    pub async fn add(&self, mut new: NewDownload) -> Result<DownloadRecord> {
+        if new.stream.is_none() && rdm_media::looks_like_stream(&new.url, None) {
+            new.stream = Some(StreamChoice::default());
+        }
+        let (name, size) = match (&new.file_name, &new.stream) {
+            (Some(name), _) => (rdm_core::sanitize_filename(name), None),
+            // Streams are named from the page title; the playlist is read
+            // when the download starts.
+            (None, Some(choice)) => (stream_file_name(&new, choice.format), None),
+            (None, None) => {
                 let p = self.probe(&new).await?;
+                if p.stream.is_some() {
+                    new.stream = Some(StreamChoice::default());
+                }
                 (p.file_name, p.size)
             }
         };
@@ -296,6 +425,7 @@ impl Manager {
             added_at: now(),
             completed_at: None,
             position: st.next_position,
+            stream: new.stream.clone(),
         };
         record.id = inner.store.insert(&record)?;
         st.next_position += 1;
@@ -533,21 +663,38 @@ impl Inner {
             r.user_agent.as_deref(),
             st.cookies.get(&id).map(String::as_str),
         )?;
-        let mut spec = DownloadSpec::new(request, Destination::File(r.path()));
-        spec.connections =
-            NonZeroUsize::new(r.connections.unwrap_or(st.settings.connections).into())
-                .unwrap_or(NonZeroUsize::MIN);
-        spec.min_split = st.settings.min_split;
-        spec.speed_limit = r.speed_limit.and_then(NonZeroU64::new);
-
-        let handle = {
-            let _enter = self.runtime.enter();
-            self.engine.start(spec)?
+        let connections = r.connections.unwrap_or(st.settings.connections);
+        let speed_limit = r.speed_limit.and_then(NonZeroU64::new);
+        let _enter = self.runtime.enter();
+        let control = if let Some(choice) = &r.stream {
+            let mut job = MediaJob::new(request, r.path());
+            job.variant = choice.variant.clone();
+            job.audio = choice.audio.clone();
+            job.format = choice.format;
+            job.concurrency = usize::from(connections).clamp(1, 16);
+            job.speed_limit = speed_limit;
+            let handle = self.media.start(job)?;
+            let control = RunControl::Stream(handle.control());
+            let this = self.clone();
+            self.runtime
+                .spawn(async move { this.watch_stream(id, handle).await });
+            control
+        } else {
+            let mut spec = DownloadSpec::new(request, Destination::File(r.path()));
+            spec.connections = NonZeroUsize::new(connections.into()).unwrap_or(NonZeroUsize::MIN);
+            spec.min_split = st.settings.min_split;
+            spec.speed_limit = speed_limit;
+            let handle = self.engine.start(spec)?;
+            let control = RunControl::File(handle.control());
+            let this = self.clone();
+            self.runtime
+                .spawn(async move { this.watch(id, handle).await });
+            control
         };
         st.active.insert(
             id,
             Active {
-                control: handle.control(),
+                control,
                 progress: None,
                 then: AfterStop::Stopped,
             },
@@ -558,9 +705,6 @@ impl Inner {
             self.save(r);
             self.emit(ManagerEvent::Updated(r.clone()));
         }
-        let this = self.clone();
-        self.runtime
-            .spawn(async move { this.watch(id, handle).await });
         Ok(())
     }
 
@@ -637,7 +781,88 @@ impl Inner {
         // The final state event is sent before `wait` returns; give the pump
         // a moment to apply anything still queued before it.
         let _ = tokio::time::timeout(Duration::from_millis(500), pump).await;
-        self.on_finished(id, result);
+        let finished = match result {
+            Ok(Outcome::Completed { size, .. }) => Finished::Completed { size, path: None },
+            Ok(Outcome::Stopped { downloaded, .. }) => Finished::Stopped {
+                downloaded: Some(downloaded).filter(|d| *d > 0),
+            },
+            Ok(Outcome::Cancelled) => Finished::Cancelled,
+            Err(e) => Finished::Failed(error_chain(&e)),
+        };
+        self.on_finished(id, finished);
+    }
+
+    async fn watch_stream(self: Arc<Self>, id: Id, handle: MediaHandle) {
+        let mut rx = handle.subscribe();
+        let this = self.clone();
+        let pump = tokio::spawn(async move {
+            while let Ok(event) = rx.recv().await {
+                match event {
+                    MediaEvent::Started { variant, audio, .. } => {
+                        this.on_stream_started(id, variant, audio)
+                    }
+                    MediaEvent::Progress(p) => this.on_stream_progress(id, &p),
+                    MediaEvent::Warning(message) => this.emit(ManagerEvent::Notice {
+                        id: Some(id),
+                        message,
+                    }),
+                    _ => {}
+                }
+            }
+        });
+        let result = handle.wait().await;
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        pump.abort();
+        let finished = match result {
+            Ok(MediaOutcome::Completed { path, size }) => Finished::Completed {
+                size,
+                path: Some(path),
+            },
+            Ok(MediaOutcome::Stopped) => Finished::Stopped { downloaded: None },
+            Ok(MediaOutcome::Cancelled) => Finished::Cancelled,
+            Err(e @ rdm_media::Error::FfmpegMissing(_)) => Finished::Failed(format!(
+                "{}. Install it from Settings → Media, then click Resume: the downloaded parts are kept.",
+                error_chain(&e)
+            )),
+            Err(e) => Finished::Failed(error_chain(&e)),
+        };
+        self.on_finished(id, finished);
+    }
+
+    fn on_stream_started(&self, id: Id, variant: String, audio: Option<String>) {
+        let mut st = self.state();
+        if let Some(r) = st.records.get_mut(&id) {
+            let label = match audio {
+                Some(a) => format!("{variant} + {a}"),
+                None => variant,
+            };
+            if let Some(choice) = r.stream.as_mut() {
+                choice.label = Some(label);
+            }
+            r.resumable = Some(true);
+            self.save(r);
+            self.emit(ManagerEvent::Updated(r.clone()));
+        }
+    }
+
+    fn on_stream_progress(&self, id: Id, p: &MediaProgress) {
+        let mut guard = self.state();
+        let st = &mut *guard;
+        if let Some(r) = st.records.get_mut(&id) {
+            r.downloaded = p.bytes;
+        }
+        if let Some(a) = st.active.get_mut(&id) {
+            a.progress = Some(LiveProgress {
+                id,
+                downloaded: p.bytes,
+                total: None,
+                speed: p.speed,
+                eta_secs: p.eta.map(|d| d.as_secs()),
+                connections: 0,
+                segments: Vec::new(),
+                stream: Some([p.segments_done, p.segments_total]),
+            });
+        }
     }
 
     fn on_started(&self, id: Id, size: Option<u64>, segmented: bool) {
@@ -660,11 +885,11 @@ impl Inner {
             }
         }
         if let Some(a) = st.active.get_mut(&id) {
-            a.progress = Some(p);
+            a.progress = Some(file_progress(id, &p));
         }
     }
 
-    fn on_finished(self: &Arc<Self>, id: Id, result: rdm_core::Result<Outcome>) {
+    fn on_finished(self: &Arc<Self>, id: Id, finished: Finished) {
         let mut guard = self.state();
         let st = &mut *guard;
         let then = st.active.remove(&id).map_or(AfterStop::Stopped, |a| a.then);
@@ -680,34 +905,37 @@ impl Inner {
                 removed = Some((r, delete_file));
             }
         } else if let Some(r) = st.records.get_mut(&id) {
-            match result {
-                Ok(Outcome::Completed { size, .. }) => {
+            match finished {
+                Finished::Completed { size, path } => {
                     r.status = Status::Completed;
                     r.size = Some(size);
                     r.downloaded = size;
                     r.completed_at = Some(now());
                     r.error = None;
+                    // Streams may end up with another extension (.ts, .mkv).
+                    if let Some(name) = path.as_deref().and_then(Path::file_name) {
+                        r.file_name = name.to_string_lossy().into_owned();
+                    }
                 }
-                Ok(Outcome::Stopped { downloaded, .. }) => {
+                Finished::Stopped { downloaded } => {
                     r.status = match then {
                         AfterStop::Queued => Status::Queued,
                         _ => Status::Stopped,
                     };
-                    if downloaded > 0 {
-                        r.downloaded = downloaded;
+                    if let Some(d) = downloaded {
+                        r.downloaded = d;
                     }
                 }
-                Ok(Outcome::Cancelled) => {
+                Finished::Cancelled => {
                     r.status = Status::Stopped;
                     r.downloaded = 0;
                 }
-                Err(e) => {
+                Finished::Failed(message) => {
                     r.status = Status::Failed;
-                    r.error = Some(error_chain(&e));
-                    r.downloaded = rdm_core::inspect_partial(&r.path())
-                        .ok()
-                        .flatten()
-                        .map_or(r.downloaded, |p| p.downloaded);
+                    r.error = Some(message);
+                    if let Ok(Some(p)) = rdm_core::inspect_partial(&r.path()) {
+                        r.downloaded = p.downloaded;
+                    }
                 }
             }
             self.save(r);
@@ -765,24 +993,77 @@ async fn ticker(inner: Weak<Inner>) {
 
 fn live_progress(st: &State) -> Vec<LiveProgress> {
     st.active
-        .iter()
-        .filter_map(|(id, a)| {
-            let p = a.progress.as_ref()?;
-            Some(LiveProgress {
-                id: *id,
-                downloaded: p.downloaded,
-                total: p.total,
-                speed: p.speed,
-                eta_secs: p.eta.map(|d| d.as_secs()),
-                connections: p.connections,
-                segments: p
-                    .segments
-                    .iter()
-                    .map(|s| [s.start, s.position, s.end])
-                    .collect(),
-            })
-        })
+        .values()
+        .filter_map(|a| a.progress.clone())
         .collect()
+}
+
+fn file_progress(id: Id, p: &Progress) -> LiveProgress {
+    LiveProgress {
+        id,
+        downloaded: p.downloaded,
+        total: p.total,
+        speed: p.speed,
+        eta_secs: p.eta.map(|d| d.as_secs()),
+        connections: p.connections,
+        segments: p
+            .segments
+            .iter()
+            .map(|s| [s.start, s.position, s.end])
+            .collect(),
+        stream: None,
+    }
+}
+
+/// Parts folder of a stream download.
+fn parts_path(path: &Path) -> PathBuf {
+    let mut s = path.as_os_str().to_owned();
+    s.push(".rdm-parts");
+    PathBuf::from(s)
+}
+
+/// A file name for a stream: the page title if known, else the URL.
+fn stream_file_name(new: &NewDownload, format: OutputFormat) -> String {
+    const GENERIC: [&str; 6] = [
+        "master",
+        "index",
+        "playlist",
+        "manifest",
+        "stream",
+        "chunklist",
+    ];
+    let ext = match format {
+        OutputFormat::Auto | OutputFormat::Mp4 => "mp4",
+        OutputFormat::Mkv => "mkv",
+        OutputFormat::M4a => "m4a",
+        OutputFormat::Mp3 => "mp3",
+    };
+    let from_url = || {
+        let url = rdm_core::Url::parse(&new.url).ok()?;
+        let stem = url
+            .path_segments()?
+            .next_back()?
+            .rsplit_once('.')
+            .map_or("", |(stem, _)| stem)
+            .to_owned();
+        if stem.is_empty() || GENERIC.contains(&stem.to_ascii_lowercase().as_str()) {
+            url.host_str().map(|h| format!("{h} video"))
+        } else {
+            Some(stem)
+        }
+    };
+    let base = new
+        .title
+        .as_deref()
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+        .map(str::to_owned)
+        .or_else(from_url)
+        .unwrap_or_else(|| "video".into());
+    // Titles are not paths: keep text around slashes instead of treating
+    // them as directories.
+    let base = base.replace(['/', '\\'], "_");
+    rdm_core::sanitize_filename(&format!("{base}.{ext}"))
 }
 
 fn queue_states(st: &State) -> Vec<QueueState> {
@@ -855,6 +1136,7 @@ fn unique_name(records: &BTreeMap<Id, DownloadRecord>, dir: &Path, name: &str) -
         let path = dir.join(candidate);
         path.exists()
             || rdm_core::sidecar_path(&path).exists()
+            || parts_path(&path).exists()
             || records
                 .values()
                 .any(|r| r.directory == dir && r.file_name == candidate)
@@ -878,6 +1160,12 @@ fn unique_name(records: &BTreeMap<Id, DownloadRecord>, dir: &Path, name: &str) -
 
 /// Deletes a file and its resume metadata; missing files are fine.
 fn remove_files(path: &Path) {
+    let parts = parts_path(path);
+    if parts.is_dir()
+        && let Err(e) = std::fs::remove_dir_all(&parts)
+    {
+        tracing::warn!("could not delete {}: {e}", parts.display());
+    }
     for p in [path.to_path_buf(), rdm_core::sidecar_path(path)] {
         if let Err(e) = std::fs::remove_file(&p)
             && e.kind() != std::io::ErrorKind::NotFound

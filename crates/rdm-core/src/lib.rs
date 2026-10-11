@@ -37,6 +37,7 @@ mod download;
 mod engine;
 mod error;
 mod events;
+mod fetch;
 mod http;
 mod probe;
 mod ranges;
@@ -52,6 +53,7 @@ pub use config::{
 pub use engine::{DownloadControl, DownloadHandle, Engine};
 pub use error::{Error, Result};
 pub use events::{DownloadId, Event, Outcome, Progress, State};
+pub use fetch::{DEFAULT_MAX_FETCH, Fetched, Fetcher};
 pub use probe::{ProbeInfo, sanitize_filename};
 pub use ranges::RangeSet;
 pub use reqwest::Url;

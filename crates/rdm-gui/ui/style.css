@@ -250,6 +250,10 @@ dialog h2 { margin: 0 0 4px; font-size: 16px; }
 fieldset.field { gap: 6px; }
 .row { display: flex; gap: 6px; }
 .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.grid3 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.grid3 > :first-child { grid-column: 1 / -1; }
+.stream-options { padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--panel-2); }
+#ffmpeg-status.ok { color: var(--done); }
 .check { display: flex; align-items: center; gap: 8px; }
 .actions { display: flex; gap: 8px; margin-top: 8px; }
 .error { color: var(--error); margin: 0; min-height: 1em; white-space: pre-wrap; -webkit-user-select: text; user-select: text; }
@@ -260,8 +264,8 @@ fieldset.field { gap: 6px; }
 details.advanced summary { cursor: pointer; color: var(--muted); }
 details.advanced[open] { display: flex; flex-direction: column; gap: 10px; }
 
-.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
-.tabs button { border: 0; border-radius: 6px 6px 0 0; background: transparent; padding: 7px 12px; color: var(--muted); }
+.tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
+.tabs button { border: 0; border-radius: 6px 6px 0 0; background: transparent; padding: 7px 10px; color: var(--muted); }
 .tabs button[aria-selected=true] { color: var(--accent); box-shadow: inset 0 -2px 0 var(--accent); font-weight: 600; }
 .tab { display: flex; flex-direction: column; gap: 10px; min-height: 260px; }
 .tab[hidden] { display: none; }

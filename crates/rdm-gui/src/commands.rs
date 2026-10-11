@@ -8,8 +8,8 @@ use std::sync::Arc;
 use rdm_host::install::{Browser, BrowserStatus, Installer};
 use rdm_ipc::AddItem;
 use rdm_manager::{
-    DownloadRecord, Id, LiveProgress, Manager, NewDownload, ProbeResult, QueueState, Settings,
-    error_chain,
+    DownloadRecord, FfmpegStatus, Id, LiveProgress, Manager, NewDownload, ProbeResult, QueueState,
+    Settings, error_chain,
 };
 use tauri::{AppHandle, State};
 
@@ -187,4 +187,16 @@ pub fn uninstall_browser_integration(browser: Option<String>) -> CmdResult<Vec<B
         installer.uninstall(b).map_err(msg)?;
     }
     Ok(installer.status())
+}
+
+#[tauri::command]
+pub async fn ffmpeg_status(manager: Mgr<'_>) -> CmdResult<FfmpegStatus> {
+    Ok(manager.ffmpeg_status().await)
+}
+
+/// Downloads a static ffmpeg build. The UI asks for consent first, showing
+/// the publisher, license and size from `ffmpeg_status`.
+#[tauri::command]
+pub async fn install_ffmpeg(manager: Mgr<'_>) -> CmdResult<FfmpegStatus> {
+    manager.install_ffmpeg().await.map_err(msg)
 }

@@ -200,7 +200,7 @@
       nodes.push(el('div', 'note', 'No downloadable media found on this page yet. Start playback and try again.'));
     }
     for (const item of items) {
-      const supported = item.kind === 'video' || item.kind === 'audio';
+      const supported = ['video', 'audio', 'hls', 'dash'].includes(item.kind);
       const btn = el('button', 'item');
       btn.type = 'button';
       btn.disabled = !supported;
@@ -211,12 +211,18 @@
           'meta',
           supported
             ? [labelFor(item.kind), sizeText(item.size)].filter(Boolean).join(' · ')
-            : `${labelFor(item.kind)} · streaming playlists are not supported yet`,
+            : labelFor(item.kind),
         ),
       );
       btn.addEventListener('click', async () => {
         btn.disabled = true;
-        const reply = await send({ type: 'send', items: [{ url: item.url, fileName: item.fileName }], mode: 'ask' });
+        // Streams are named after the page; their URLs say "master.m3u8".
+        const stream = item.kind === 'hls' || item.kind === 'dash';
+        const reply = await send({
+          type: 'send',
+          items: [{ url: item.url, kind: item.kind, title: document.title, fileName: stream ? undefined : item.fileName }],
+          mode: 'ask',
+        });
         if (reply?.type === 'error') {
           ui.menu.replaceChildren(el('div', 'note error', reply.message));
         } else {

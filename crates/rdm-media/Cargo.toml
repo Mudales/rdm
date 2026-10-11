@@ -9,8 +9,22 @@ authors.workspace = true
 
 [dependencies]
 rdm-core.workspace = true
+aes = "0.9"
+cbc = { version = "0.2", features = ["alloc"] }
+dirs.workspace = true
+roxmltree = "0.21"
+serde.workspace = true
+serde_json.workspace = true
+sha2 = "0.10"
 thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time", "macros", "fs", "io-util", "process"] }
 tracing.workspace = true
+zip = { version = "9", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+rdm-tests.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros"] }
 
 [lints]
 workspace = true

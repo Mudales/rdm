@@ -17,7 +17,7 @@ use std::io::{self, Read};
 use std::path::Path;
 
 pub use faults::{ErrorFault, Faults};
-pub use server::{MockConfig, MockServer};
+pub use server::{MockConfig, MockServer, StaticFile};
 
 fn splitmix64(mut x: u64) -> u64 {
     x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);

@@ -4,6 +4,8 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use rdm_media::{Manifest, OutputFormat};
+
 use crate::settings::Settings;
 
 /// Download identifier (the database row id).
@@ -73,6 +75,21 @@ pub struct DownloadRecord {
     pub completed_at: Option<i64>,
     /// Order within the list and its queue.
     pub position: i64,
+    /// Set for HLS/DASH streams: which rendition and output format.
+    pub stream: Option<StreamChoice>,
+}
+
+/// How to download a streaming playlist.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct StreamChoice {
+    /// Variant id from the manifest; best quality if `None`.
+    pub variant: Option<String>,
+    /// Audio track id; the default track if `None`.
+    pub audio: Option<String>,
+    pub format: OutputFormat,
+    /// What was chosen, for display ("1080p · 5.0 Mbps").
+    pub label: Option<String>,
 }
 
 impl DownloadRecord {
@@ -118,10 +135,15 @@ pub struct NewDownload {
     pub connections: Option<u8>,
     pub speed_limit: Option<u64>,
     pub start: StartMode,
+    /// Download as a stream (HLS/DASH). Playlist URLs are detected
+    /// automatically; this picks a rendition and format.
+    pub stream: Option<StreamChoice>,
+    /// Page title, used to name streams (whose URLs say "master.m3u8").
+    pub title: Option<String>,
 }
 
 /// Result of probing a URL for the Add dialog.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProbeResult {
     pub url: String,
@@ -133,6 +155,8 @@ pub struct ProbeResult {
     pub content_type: Option<String>,
     pub category_id: Option<u32>,
     pub directory: PathBuf,
+    /// For streaming playlists: the renditions to choose from.
+    pub stream: Option<Manifest>,
 }
 
 /// Live progress of a running download.
@@ -149,6 +173,8 @@ pub struct LiveProgress {
     /// Unfinished segments as `[start, position, end]`; everything else in
     /// `[0, total)` is done.
     pub segments: Vec<[u64; 3]>,
+    /// Streams: `[segments done, segments total]`.
+    pub stream: Option<[usize; 2]>,
 }
 
 /// Runtime view of a queue.

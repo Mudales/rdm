@@ -191,14 +191,29 @@ function drawProgress(canvas, r) {
       if (pos > start || pos === 0) ctx.fillRect(Math.floor((pos / total) * w), 0, Math.max(1, dpr), hgt);
     }
     ctx.globalAlpha = 1;
-  } else if (total) {
-    ctx.fillRect(0, 0, Math.round((Math.min(r.downloaded, total) / total) * w), hgt);
+  } else {
+    const f = fraction(r);
+    if (f != null) ctx.fillRect(0, 0, Math.round(f * w), hgt);
   }
+}
+
+/** Fraction done in [0, 1], or null when unknown. */
+function fraction(r) {
+  if (r.status === 'completed') return 1;
+  const live = state.live.get(r.id);
+  if (live?.stream) return live.stream[1] ? live.stream[0] / live.stream[1] : null;
+  const total = live?.total ?? r.size;
+  return total ? Math.min(r.downloaded, total) / total : null;
 }
 
 function percent(r) {
   if (r.status === 'completed') return '100%';
-  const total = state.live.get(r.id)?.total ?? r.size;
+  const live = state.live.get(r.id);
+  if (live?.stream) {
+    const f = fraction(r);
+    return f == null ? '' : `${Math.floor(f * 1000) / 10}%`;
+  }
+  const total = live?.total ?? r.size;
   if (!total) return '';
   return `${Math.floor((Math.min(r.downloaded, total) / total) * 1000) / 10}%`;
 }
@@ -337,7 +352,7 @@ function updateRow(tr, r) {
   }
   setText($('.name', nameCell), r.fileName);
   nameCell.title = r.url;
-  setText($('.size', tr), fmtBytes(r.size));
+  setText($('.size', tr), r.size != null ? fmtBytes(r.size) : r.downloaded ? fmtBytes(r.downloaded) : '—');
   setText($('.pct', tr), percent(r));
   setText($('.speed', tr), r.status === 'downloading' ? fmtSpeed(state.live.get(r.id)?.speed) : '');
   const status = $('.status', tr);
@@ -425,6 +440,7 @@ function renderDetails() {
       row('Size', r.size != null ? `${fmtBytes(r.size)} (${r.size.toLocaleString()} bytes)` : 'Unknown'),
       row('Downloaded', refs.downloaded),
       row('Connections', refs.connections),
+      r.stream ? row('Stream', [r.stream.label ?? 'Best quality', r.stream.format !== 'auto' ? r.stream.format.toUpperCase() : null].filter(Boolean).join(' · ')) : null,
       row('Resumable', r.resumable == null ? 'Not known yet' : r.resumable ? 'Yes' : 'No — restarts from zero if interrupted'),
       row('Queue', queue(r.queueId)?.name ?? '—'),
       r.error ? [h('dt', { text: 'Error' }), h('dd', { class: 'err', text: r.error })] : null,
@@ -439,7 +455,10 @@ function updateDetailsLive() {
   if (!r || !details.refs) return;
   const live = state.live.get(r.id);
   setText(details.refs.downloaded, `${fmtBytes(r.downloaded)}${r.size ? ` of ${fmtBytes(r.size)}` : ''}`);
-  setText(details.refs.connections, live ? `${live.connections} active · ${fmtSpeed(live.speed) || '—'}` : '—');
+  setText(
+    details.refs.connections,
+    !live ? '—' : live.stream ? `${live.stream[0]} of ${live.stream[1]} segments · ${fmtSpeed(live.speed) || '—'}` : `${live.connections} active · ${fmtSpeed(live.speed) || '—'}`,
+  );
   drawProgress(details.refs.canvas, r);
 }
 
@@ -642,7 +661,7 @@ function openRemove() {
 // Add dialog
 // ---------------------------------------------------------------------------
 
-const add = { probeToken: 0, dirTouched: false, nameTouched: false };
+const add = { probeToken: 0, dirTouched: false, nameTouched: false, stream: null, title: null };
 
 function fillSelect(select, items, value) {
   select.replaceChildren(...items.map(([v, label]) => h('option', { value: String(v), text: label })));
@@ -658,6 +677,8 @@ function openAdd(prefill = {}) {
   const url = prefill.url ?? '';
   add.dirTouched = false;
   add.nameTouched = !!prefill.fileName;
+  add.title = prefill.title ?? null;
+  showStreamOptions(null);
   add.probeToken++;
   $('#form-add').reset();
   $('#add-url').value = url;
@@ -681,6 +702,28 @@ function setProbeInfo(text, ok = false) {
   el.classList.toggle('ok', ok);
 }
 
+/** Shows the quality/audio/format pickers for a stream manifest (or hides them). */
+function showStreamOptions(manifest) {
+  add.stream = manifest;
+  $('#add-stream').hidden = !manifest;
+  if (!manifest) return;
+  fillSelect($('#add-variant'), manifest.variants.map((v) => [v.id, v.label]), manifest.variants[0]?.id ?? '');
+  const audio = manifest.audio;
+  $('#add-audio').disabled = audio.length === 0;
+  fillSelect(
+    $('#add-audio'),
+    audio.length ? audio.map((a) => [a.id, a.label]) : [['', 'Included in video']],
+    (audio.find((a) => a.default) ?? audio[0])?.id ?? '',
+  );
+}
+
+$('#add-format').addEventListener('change', () => {
+  // Keep the file name's extension in step with the format.
+  const ext = { auto: 'mp4', mp4: 'mp4', mkv: 'mkv', m4a: 'm4a', mp3: 'mp3' }[$('#add-format').value];
+  const name = $('#add-name');
+  if (add.stream && name.value) name.value = name.value.replace(/\.[^.]+$/, '') + `.${ext}`;
+});
+
 function numberOrNull(input, scale = 1) {
   const v = input.value.trim();
   return v === '' ? null : Math.round(Number(v) * scale);
@@ -700,6 +743,15 @@ function addRequest(start) {
     cookies: text('#add-cookies'),
     connections: numberOrNull($('#add-conns')),
     speedLimit: numberOrNull($('#add-limit'), 1024) || null,
+    title: add.title,
+    stream: add.stream
+      ? {
+          variant: $('#add-variant').value || null,
+          audio: $('#add-audio').value || null,
+          format: $('#add-format').value,
+          label: $('#add-variant').selectedOptions[0]?.textContent ?? null,
+        }
+      : null,
     start,
   };
 }
@@ -722,6 +774,15 @@ async function probe() {
       $('#add-category').value = String(p.categoryId);
     }
     if (!add.dirTouched) $('#add-dir').value = p.directory;
+    showStreamOptions(p.stream ?? null);
+    if (p.stream) {
+      const s = p.stream;
+      const parts = [`${s.kind.toUpperCase()} stream`, `${s.variants.length} ${s.variants.length === 1 ? 'quality' : 'qualities'}`];
+      if (s.duration) parts.push(fmtEta(Math.round(s.duration)));
+      if (s.audio.length) parts.push(`${s.audio.length} audio tracks`);
+      setProbeInfo(parts.join(' · '), true);
+      return;
+    }
     const parts = [p.size != null ? fmtBytes(p.size) : 'Size unknown'];
     if (p.contentType) parts.push(p.contentType.split(';')[0]);
     parts.push(p.resumable ? 'resumable, multi-connection' : 'not resumable (one connection)');
@@ -729,6 +790,7 @@ async function probe() {
   } catch (e) {
     if (token !== add.probeToken) return;
     setProbeInfo('');
+    showStreamOptions(null);
     $('#add-error').textContent = errorText(e);
   }
 }
@@ -907,6 +969,7 @@ function openSettings() {
   $('#set-dir').value = draft.defaultDirectory;
   $('#set-tray').checked = draft.closeToTray;
   $('#set-clipboard').checked = draft.clipboardMonitoring;
+  refreshFfmpeg();
   $('#set-browsers-error').textContent = '';
   refreshBrowsers();
   $('#set-conns').value = draft.connections;
@@ -960,6 +1023,48 @@ async function browserAction(cmd, browser) {
   }
 }
 $('#set-browsers-install').addEventListener('click', () => browserAction('install_browser_integration', null));
+
+let ffmpegInfo = null;
+function renderFfmpeg(s) {
+  ffmpegInfo = s;
+  const status = $('#ffmpeg-status');
+  status.textContent = s.path ? `Found: ${s.version ?? 'ffmpeg'} (${s.path})` : 'Not found.';
+  status.className = s.path ? 'ok' : '';
+  const btn = $('#ffmpeg-install');
+  btn.hidden = !!s.path || !s.download;
+  if (s.download) btn.textContent = `Download ffmpeg (~${s.download.sizeMb} MB)`;
+  $('#ffmpeg-hint').textContent = s.path ? '' : s.hint;
+}
+async function refreshFfmpeg() {
+  $('#ffmpeg-error').textContent = '';
+  try {
+    renderFfmpeg(await backend.invoke('ffmpeg_status'));
+  } catch (e) {
+    $('#ffmpeg-error').textContent = errorText(e);
+  }
+}
+$('#ffmpeg-install').addEventListener('click', async () => {
+  const d = ffmpegInfo?.download;
+  if (!d) return;
+  const ok = confirm(
+    `Download ffmpeg?\n\nA prebuilt ffmpeg (${d.license}, about ${d.sizeMb} MB) will be downloaded from ${d.publisher}, ` +
+      `checked against its published SHA-256 checksum, and kept in rdm's own folder. ffmpeg is a separate program under its own license.`,
+  );
+  if (!ok) return;
+  const btn = $('#ffmpeg-install');
+  btn.disabled = true;
+  btn.textContent = 'Downloading…';
+  $('#ffmpeg-error').textContent = '';
+  try {
+    renderFfmpeg(await backend.invoke('install_ffmpeg'));
+    toast('ffmpeg is ready.');
+  } catch (e) {
+    $('#ffmpeg-error').textContent = errorText(e);
+    renderFfmpeg(ffmpegInfo);
+  } finally {
+    btn.disabled = false;
+  }
+});
 $('#form-settings').addEventListener('submit', async (e) => {
   e.preventDefault();
   const mode = $('input[name=proxy]:checked')?.value ?? 'system';

@@ -42,11 +42,13 @@ const MIGRATIONS: &[&str] = &[
          position     INTEGER NOT NULL
      );
      CREATE INDEX downloads_status ON downloads(status);",
+    // 2: stream downloads
+    "ALTER TABLE downloads ADD COLUMN stream TEXT;",
 ];
 
 const COLUMNS: &str = "id, url, file_name, directory, category_id, queue_id, status, error, \
      size, downloaded, resumable, referer, user_agent, connections, speed_limit, added_at, \
-     completed_at, position";
+     completed_at, position, stream";
 
 #[derive(Debug)]
 pub(crate) struct Store {
@@ -132,8 +134,8 @@ impl Store {
         conn.execute(
             "INSERT INTO downloads (url, file_name, directory, category_id, queue_id, status,
                  error, size, downloaded, resumable, referer, user_agent, connections,
-                 speed_limit, added_at, completed_at, position)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+                 speed_limit, added_at, completed_at, position, stream)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
             params![
                 r.url,
                 r.file_name,
@@ -152,6 +154,7 @@ impl Store {
                 r.added_at,
                 r.completed_at,
                 r.position,
+                stream_json(r)?,
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -162,7 +165,8 @@ impl Store {
             "UPDATE downloads SET url = ?2, file_name = ?3, directory = ?4, category_id = ?5,
                  queue_id = ?6, status = ?7, error = ?8, size = ?9, downloaded = ?10,
                  resumable = ?11, referer = ?12, user_agent = ?13, connections = ?14,
-                 speed_limit = ?15, added_at = ?16, completed_at = ?17, position = ?18
+                 speed_limit = ?15, added_at = ?16, completed_at = ?17, position = ?18,
+                 stream = ?19
              WHERE id = ?1",
             params![
                 r.id,
@@ -183,6 +187,7 @@ impl Store {
                 r.added_at,
                 r.completed_at,
                 r.position,
+                stream_json(r)?,
             ],
         )?;
         Ok(())
@@ -193,6 +198,13 @@ impl Store {
             .execute("DELETE FROM downloads WHERE id = ?1", [id])?;
         Ok(())
     }
+}
+
+fn stream_json(r: &DownloadRecord) -> Result<Option<String>> {
+    r.stream
+        .as_ref()
+        .map(|s| serde_json::to_string(s).map_err(|e| Error::Corrupt(e.to_string())))
+        .transpose()
 }
 
 fn to_i64(v: u64) -> i64 {
@@ -213,6 +225,13 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<Result<DownloadRecord>> {
     let Some(status) = Status::parse(&status) else {
         return Ok(Err(Error::Corrupt(format!("unknown status `{status}`"))));
     };
+    let stream = match row.get::<_, Option<String>>(18)? {
+        Some(json) => match serde_json::from_str(&json) {
+            Ok(s) => Some(s),
+            Err(e) => return Ok(Err(Error::Corrupt(format!("bad stream settings: {e}")))),
+        },
+        None => None,
+    };
     Ok(Ok(DownloadRecord {
         id: row.get(0)?,
         url: row.get(1)?,
@@ -232,6 +251,7 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<Result<DownloadRecord>> {
         added_at: row.get(15)?,
         completed_at: row.get(16)?,
         position: row.get(17)?,
+        stream,
     }))
 }
 
@@ -259,6 +279,11 @@ mod tests {
             added_at: 1_700_000_000,
             completed_at: None,
             position: 1,
+            stream: Some(crate::model::StreamChoice {
+                variant: Some("v2".into()),
+                label: Some("720p".into()),
+                ..Default::default()
+            }),
         }
     }
 
@@ -283,6 +308,31 @@ mod tests {
         assert_eq!(store.load_settings().unwrap(), Some(settings));
         store.delete(r.id).unwrap();
         assert!(store.load_downloads().unwrap().is_empty());
+    }
+
+    #[test]
+    fn upgrades_a_version_1_database() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db.sqlite3");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(MIGRATIONS[0]).unwrap();
+            conn.pragma_update(None, "user_version", 1).unwrap();
+            conn.execute(
+                "INSERT INTO downloads (url, file_name, directory, queue_id, status, added_at, position)
+                 VALUES ('https://x/a.zip', 'a.zip', '/tmp', 1, 'stopped', 1, 0)",
+                [],
+            )
+            .unwrap();
+        }
+        let store = Store::open(&path).unwrap();
+        let rows = store.load_downloads().unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].stream, None);
+        let mut r = rows[0].clone();
+        r.stream = Some(crate::model::StreamChoice::default());
+        store.update(&r).unwrap();
+        assert_eq!(store.load_downloads().unwrap()[0].stream, r.stream);
     }
 
     #[test]

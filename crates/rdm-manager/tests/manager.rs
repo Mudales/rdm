@@ -8,21 +8,22 @@ use std::time::Duration;
 
 use rdm_core::EngineConfig;
 use rdm_manager::{
-    DownloadRecord, Id, MAIN_QUEUE, Manager, ManagerEvent, NewDownload, ProxySetting, Queue,
-    Settings, StartMode, Status,
+    DownloadRecord, FfmpegConfig, Id, MAIN_QUEUE, Manager, ManagerEvent, NewDownload, ProxySetting,
+    Queue, Settings, StartMode, Status,
 };
 use rdm_tests::{ErrorFault, MockConfig, MockServer, verify_file};
 
 const MIB: u64 = 1 << 20;
 
 async fn open(dir: &Path) -> Manager {
-    let m = Manager::open(
+    let m = Manager::open_with(
         &dir.join("data"),
         EngineConfig {
             progress_interval: Duration::from_millis(50),
             checkpoint_interval: Duration::from_millis(200),
             ..EngineConfig::default()
         },
+        FfmpegConfig::Disabled,
     )
     .await
     .unwrap();
@@ -369,4 +370,76 @@ async fn cookies_are_used_but_never_stored() {
         let found = bytes.windows(secret.len()).any(|w| w == secret.as_bytes());
         assert!(!found, "cookie found on disk");
     }
+}
+
+fn hls_server_config(n: usize) -> (MockConfig, Vec<u8>) {
+    let mut playlist = String::from("#EXTM3U\n#EXT-X-TARGETDURATION:2\n");
+    let mut cfg = MockConfig::new(1);
+    let mut expected = Vec::new();
+    for i in 0..n {
+        let mut seg = vec![0u8; 3000 + i];
+        rdm_tests::fill(900 + i as u64, 0, &mut seg);
+        expected.extend_from_slice(&seg);
+        playlist.push_str(&format!("#EXTINF:2,\nseg{i}.ts\n"));
+        cfg = cfg.with_file(&format!("/live/seg{i}.ts"), seg, "video/mp2t");
+    }
+    playlist.push_str("#EXT-X-ENDLIST\n");
+    let master = "#EXTM3U\n#EXT-X-STREAM-INF:BANDWIDTH=1500000,RESOLUTION=1280x720\nindex.m3u8\n";
+    cfg = cfg
+        .with_file(
+            "/live/index.m3u8",
+            playlist,
+            "application/vnd.apple.mpegurl",
+        )
+        .with_file("/live/master.m3u8", master, "application/vnd.apple.mpegurl");
+    (cfg, expected)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn streams_are_detected_named_by_title_and_downloaded() {
+    let (cfg, expected) = hls_server_config(5);
+    let server = MockServer::start(cfg).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let m = open(dir.path()).await;
+    let url = format!("http://{}/live/master.m3u8", server.addr());
+
+    let probe = m.probe(&new(&url)).await.unwrap();
+    let manifest = probe.stream.expect("a stream manifest");
+    assert_eq!(manifest.variants[0].label, "720p · 1.5 Mbps");
+    assert_eq!(probe.file_name, format!("{} video.mp4", server.addr().ip()));
+
+    let mut n = new(&url);
+    n.title = Some("Conference: Keynote / Day 1".into());
+    let r = m.add(n).await.unwrap();
+    assert_eq!(r.file_name, "Conference_ Keynote _ Day 1.mp4");
+    assert!(r.stream.is_some());
+    assert_eq!(r.directory, dir.path().join("dl").join("Video"));
+
+    let done = completed(&m, r.id).await;
+    assert_eq!(done.status, Status::Completed, "{:?}", done.error);
+    // ffmpeg is disabled in tests, so the stream stays MPEG-TS.
+    assert_eq!(done.file_name, "Conference_ Keynote _ Day 1.ts");
+    assert_eq!(std::fs::read(done.path()).unwrap(), expected);
+    assert_eq!(
+        done.stream.unwrap().label.as_deref(),
+        Some("720p · 1.5 Mbps")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn protected_streams_are_refused_when_probing() {
+    let drm =
+        "#EXTM3U\n#EXT-X-KEY:METHOD=SAMPLE-AES,URI=\"skd://k\"\n#EXTINF:2,\na.ts\n#EXT-X-ENDLIST\n";
+    let server = mock(1, |_| {}).await;
+    drop(server);
+    let mut cfg = MockConfig::new(1);
+    cfg = cfg.with_file("/drm.m3u8", drm, "application/vnd.apple.mpegurl");
+    let server = MockServer::start(cfg).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let m = open(dir.path()).await;
+    let err = m
+        .probe(&new(&format!("http://{}/drm.m3u8", server.addr())))
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("protected content"), "{err}");
 }

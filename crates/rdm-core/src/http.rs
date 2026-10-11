@@ -110,6 +110,19 @@ impl HttpClient {
         rb
     }
 
+    /// A GET for another URL with this request's headers, cookies and
+    /// proxy. Basic auth is only sent to the request's own origin, so
+    /// credentials never leak to a CDN or another host.
+    pub fn get_url(&self, url: &Url) -> RequestBuilder {
+        let mut rb = self.client.get(url.clone());
+        if let Some(auth) = &self.request.auth
+            && url.origin() == self.request.url.origin()
+        {
+            rb = rb.basic_auth(&auth.username, auth.password.as_deref());
+        }
+        rb
+    }
+
     pub fn url(&self) -> &Url {
         &self.request.url
     }

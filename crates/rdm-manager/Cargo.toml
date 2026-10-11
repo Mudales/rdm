@@ -9,6 +9,7 @@ authors.workspace = true
 
 [dependencies]
 rdm-core.workspace = true
+rdm-media.workspace = true
 dirs.workspace = true
 rusqlite.workspace = true
 serde.workspace = true

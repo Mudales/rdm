@@ -12,6 +12,9 @@ pub enum Error {
     #[error(transparent)]
     Engine(#[from] rdm_core::Error),
 
+    #[error(transparent)]
+    Media(#[from] rdm_media::Error),
+
     #[error("database error")]
     Database(#[from] rusqlite::Error),
 

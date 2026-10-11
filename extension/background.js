@@ -124,6 +124,8 @@ async function sendToApp(items, mode, pageUrl) {
       }
       return {
         url: item.url,
+        kind: item.kind || undefined,
+        title: item.title || undefined,
         fileName: item.fileName || undefined,
         referer: item.referer || pageUrl || undefined,
         pageUrl: pageUrl || undefined,
@@ -194,7 +196,9 @@ const handlers = {
     return mediaFor(msg.tabId ?? sender.tab?.id);
   },
   async send(msg, sender) {
-    return sendToApp(msg.items, msg.mode ?? 'ask', msg.pageUrl ?? sender.tab?.url);
+    const title = sender.tab?.title;
+    const items = msg.items.map((i) => ({ title, ...i }));
+    return sendToApp(items, msg.mode ?? 'ask', msg.pageUrl ?? sender.tab?.url);
   },
   async ping() {
     return native({ type: 'ping' });

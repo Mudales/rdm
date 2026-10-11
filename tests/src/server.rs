@@ -1,5 +1,6 @@
 //! The axum mock server.
 
+use std::collections::HashMap;
 use std::io;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
@@ -36,6 +37,16 @@ pub struct MockConfig {
     /// Send `Content-Length` (otherwise the body is chunked).
     pub content_length: bool,
     pub faults: Faults,
+    /// Fixed files served at exact paths (playlists, segments, keys), with
+    /// range support. Every other path serves the generated file.
+    pub files: Arc<HashMap<String, StaticFile>>,
+}
+
+/// A fixed response body.
+#[derive(Debug, Clone)]
+pub struct StaticFile {
+    pub body: Bytes,
+    pub content_type: String,
 }
 
 impl MockConfig {
@@ -50,7 +61,20 @@ impl MockConfig {
             content_disposition: None,
             content_length: true,
             faults: Faults::default(),
+            files: Arc::default(),
         }
+    }
+
+    /// Adds a fixed file at `path` (e.g. `/live/index.m3u8`).
+    pub fn with_file(mut self, path: &str, body: impl Into<Bytes>, content_type: &str) -> Self {
+        Arc::make_mut(&mut self.files).insert(
+            path.to_owned(),
+            StaticFile {
+                body: body.into(),
+                content_type: content_type.to_owned(),
+            },
+        );
+        self
     }
 }
 
@@ -62,6 +86,8 @@ struct Stats {
     active: AtomicUsize,
     peak: AtomicUsize,
     body_faults: AtomicU64,
+    /// Request paths in arrival order.
+    paths: Mutex<Vec<String>>,
     /// Byte ranges served, as inclusive `(first, last)`, in request order.
     served_ranges: Mutex<Vec<(u64, u64)>>,
 }
@@ -162,6 +188,21 @@ impl MockServer {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    /// Every request path, in arrival order.
+    pub fn paths(&self) -> Vec<String> {
+        self.shared
+            .stats
+            .paths
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// How often `path` was requested.
+    pub fn hits(&self, path: &str) -> usize {
+        self.paths().iter().filter(|p| *p == path).count()
     }
 
     /// Highest number of simultaneously streaming responses.
@@ -272,6 +313,16 @@ async fn serve(
         }
     }
 
+    shared
+        .stats
+        .paths
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .push(uri.path().to_owned());
+    if let Some(file) = cfg.files.get(uri.path()) {
+        return serve_static(file, &headers);
+    }
+
     let size = cfg.size;
     let ranges_on = cfg.ranges
         && faults
@@ -355,6 +406,33 @@ fn header_is(headers: &HeaderMap, name: header::HeaderName, want: &str) -> bool 
         .get(name)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v == want)
+}
+
+fn serve_static(file: &StaticFile, headers: &HeaderMap) -> Response {
+    let size = file.body.len() as u64;
+    let range = headers
+        .get(header::RANGE)
+        .and_then(|v| v.to_str().ok())
+        .map(|r| parse_range(r, size));
+    let resp = Response::builder()
+        .header(header::CONTENT_TYPE, file.content_type.as_str())
+        .header(header::ACCEPT_RANGES, "bytes");
+    match range {
+        None => resp
+            .status(StatusCode::OK)
+            .body(Body::from(file.body.clone()))
+            .unwrap_or_default(),
+        Some(None) => Response::builder()
+            .status(StatusCode::RANGE_NOT_SATISFIABLE)
+            .header(header::CONTENT_RANGE, format!("bytes */{size}"))
+            .body(Body::empty())
+            .unwrap_or_default(),
+        Some(Some((a, b))) => resp
+            .status(StatusCode::PARTIAL_CONTENT)
+            .header(header::CONTENT_RANGE, format!("bytes {a}-{b}/{size}"))
+            .body(Body::from(file.body.slice(a as usize..=b as usize)))
+            .unwrap_or_default(),
+    }
 }
 
 /// `If-Range` absent, or equal to the current ETag / Last-Modified.

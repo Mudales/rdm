@@ -28,8 +28,9 @@ Every request carries the page URL as `Referer`, the browser's
 `User-Agent`, and the cookies for the target URL, because many hosts refuse
 downloads without them. rdm keeps cookies in memory only.
 
-HLS/DASH playlists are detected and listed, but downloading them comes with
-streaming support in the next phase.
+HLS and DASH playlists are downloadable. rdm's Add dialog lets you pick the
+quality, the audio track and the format, and the file is named after the
+page title. DRM-protected streams are refused.
 
 ## How it reaches the app
 

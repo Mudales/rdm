@@ -74,13 +74,19 @@ async function showMedia() {
           'span',
           { class: 'text' },
           el('span', { class: 'name', text: item.fileName || item.url }),
-          el('span', { class: 'meta', text: supported ? describe(item) : `${describe(item)} · not supported yet` }),
+          el('span', { class: 'meta', text: describe(item) }),
         ),
         el('button', {
           text: 'Download',
           disabled: !supported,
           onclick: async () => {
-            const reply = await send({ type: 'send', items: [{ url: item.url, fileName: item.fileName }], mode: 'ask', pageUrl: tab.url });
+            const stream = item.kind === 'hls' || item.kind === 'dash';
+            const reply = await send({
+              type: 'send',
+              items: [{ url: item.url, kind: item.kind, title: tab.title, fileName: stream ? undefined : item.fileName }],
+              mode: 'ask',
+              pageUrl: tab.url,
+            });
             report(reply, 'Sent to rdm.');
           },
         }),

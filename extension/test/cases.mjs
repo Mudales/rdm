@@ -10,6 +10,7 @@ import {
   filterLinks,
   responseSize,
   shouldCapture,
+  isSupportedKind,
   DEFAULT_SETTINGS,
 } from '../lib/detect.js';
 
@@ -91,6 +92,12 @@ export const cases = [
     t.equal(shouldCapture({ url: 'data:application/zip;base64,AA', filename: 'a.zip' }, s), false);
     t.equal(shouldCapture({ url: 'https://x/a.zip', filename: 'a.zip', byExtensionId: 'other' }, s), false);
     t.equal(shouldCapture({ url: 'https://x/a.zip', filename: 'a.zip' }, { ...s, captureDownloads: false }), false);
+  }],
+
+  ['streams are downloadable', (t) => {
+    t.equal(isSupportedKind('hls'), true);
+    t.equal(isSupportedKind('dash'), true);
+    t.equal(isSupportedKind('image'), false);
   }],
 
   ['descriptions are short and informative', (t) => {

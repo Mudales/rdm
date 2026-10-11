@@ -157,6 +157,34 @@ const commands = {
   probe_url: async ({ request }) => {
     await delay(400);
     if (!/^https?:\/\//.test(request.url)) throw `invalid URL \`${request.url}\`: relative URL without a base`;
+    if (/\.(m3u8|mpd)(\?|$)/.test(request.url)) {
+      return {
+        url: request.url,
+        finalUrl: request.url,
+        fileName: `${request.title ?? 'Stream'}.mp4`,
+        size: null,
+        resumable: true,
+        contentType: 'application/vnd.apple.mpegurl',
+        categoryId: 1,
+        directory: `${home}/Video`,
+        stream: {
+          kind: 'hls',
+          url: request.url,
+          duration: 2843,
+          live: false,
+          protection: null,
+          variants: [
+            { id: 'v3', label: '1080p · 6.0 Mbps · avc1+mp4a' },
+            { id: 'v2', label: '720p · 3.0 Mbps · avc1+mp4a' },
+            { id: 'v1', label: '480p · 1.4 Mbps · avc1+mp4a' },
+          ],
+          audio: [
+            { id: 'a0', label: 'English · en', default: true },
+            { id: 'a1', label: 'Español · es', default: false },
+          ],
+        },
+      };
+    }
     const fileName = request.fileName ?? decodeURIComponent(request.url.split('/').pop() || 'download');
     const categoryId = request.categoryId ?? categoryFor(fileName);
     return {
@@ -209,6 +237,12 @@ const commands = {
   show_in_folder: () => {},
   pick_folder: () => `${home}/Picked`,
   take_pending_adds: () => pending.splice(0),
+  ffmpeg_status: () => ffmpeg,
+  install_ffmpeg: async () => {
+    await delay(1500);
+    ffmpeg = { ...ffmpeg, path: `${home}/../Library/Application Support/dev.rdm.desktop/tools/ffmpeg`, version: 'ffmpeg version 9.0.2' };
+    return ffmpeg;
+  },
   browser_integration_status: () => browsers.map((b) => ({ ...b })),
   install_browser_integration: ({ browser }) => {
     browsers.filter((b) => (browser ? b.browser === browser : b.detected)).forEach((b) => Object.assign(b, { installed: true, current: true }));
@@ -218,6 +252,13 @@ const commands = {
     browsers.filter((b) => !browser || b.browser === browser).forEach((b) => Object.assign(b, { installed: false, current: false }));
     return browsers.map((b) => ({ ...b }));
   },
+};
+
+let ffmpeg = {
+  path: null,
+  version: null,
+  download: { url: 'https://ffmpeg.martin-riedl.de/redirect/latest/macos/arm64/release/ffmpeg.zip', publisher: 'Martin Riedl (ffmpeg.martin-riedl.de)', license: 'GPLv3', sizeMb: 29 },
+  hint: 'Install ffmpeg with Homebrew (`brew install ffmpeg`) or let rdm download it.',
 };
 
 const browsers = [
@@ -232,7 +273,8 @@ const browsers = [
 const pending = [];
 setTimeout(() => {
   pending.push({
-    url: 'https://videos.example.com/media/talk-2026.mp4',
+    url: 'https://videos.example.com/hls/master.m3u8',
+    title: 'Rust in 2026 — keynote',
     referer: 'https://videos.example.com/watch?v=42',
     userAgent: navigator.userAgent,
     cookies: 'session=abc123',

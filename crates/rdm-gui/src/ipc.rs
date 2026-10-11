@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use rdm_ipc::{AddItem, AddMode, Endpoint, PROTOCOL_VERSION, Request, Response, Server};
-use rdm_manager::{Manager, NewDownload, StartMode, error_chain};
+use rdm_manager::{Manager, NewDownload, StartMode, StreamChoice, error_chain};
 use tauri::AppHandle;
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
@@ -91,7 +91,10 @@ async fn add_all(manager: &Arc<Manager>, items: Vec<AddItem>, start: StartMode) 
 }
 
 fn to_new_download(item: AddItem, start: StartMode) -> NewDownload {
+    let stream = matches!(item.kind.as_deref(), Some("hls" | "dash")).then(StreamChoice::default);
     NewDownload {
+        stream,
+        title: item.title,
         url: item.url,
         file_name: item.file_name.filter(|n| !n.trim().is_empty()),
         referer: item.referer.or(item.page_url),

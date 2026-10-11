@@ -4,10 +4,10 @@ A cross-platform (macOS, Windows, Linux) download manager written in Rust,
 inspired by Internet Download Manager and
 [ab-download-manager](https://github.com/amir1376/ab-download-manager).
 
-> **Status:** Phases 1–4 done: the download engine (`rdm-core`), the
-> headless `rdm` CLI, the desktop app (`rdm-gui`, backed by `rdm-manager`)
-> and browser integration (extension, `rdm-host`, `rdm-ipc`). Streaming
-> media (HLS/DASH) comes next.
+> **Status:** Phases 1–5 done: the download engine (`rdm-core`), the
+> headless `rdm` CLI, the desktop app (`rdm-gui`, backed by `rdm-manager`),
+> browser integration (extension, `rdm-host`, `rdm-ipc`) and streaming media
+> (`rdm-media`: HLS/DASH). IDM-parity features come next.
 > See [Roadmap](#roadmap).
 
 ## Architecture
@@ -54,7 +54,7 @@ library. CI enforces this with [`scripts/check-deps.sh`](scripts/check-deps.sh).
 |---|---|---|
 | `crates/rdm-core` | lib | Probing, dynamic segmentation, positioned writes to one sparse file, resume metadata, retry/backoff, throttling, progress events |
 | `crates/rdm-manager` | lib | The download list: SQLite persistence, queues with concurrency limits, categories with folders, settings, change events. No GUI dependency |
-| `crates/rdm-media` | lib | HLS/DASH manifest parsing, segment download, ffmpeg muxing, AES-128 HLS |
+| `crates/rdm-media` | lib | HLS/DASH parsing, concurrent resumable segment download, AES-128 HLS, joining or ffmpeg merging, opt-in ffmpeg install. Refuses DRM |
 | `crates/rdm-cli` | bin `rdm` | Headless front end, used to test the engine without a GUI |
 | `crates/rdm-ipc` | lib | Messages, length-prefixed JSON framing, and a private local socket (Unix) or named pipe (Windows) between `rdm-host` and the app |
 | `crates/rdm-host` | bin `rdm-host` + lib | Native messaging host, launching the app on demand, and the per-browser manifest installer (Chrome, Chromium, Edge, Brave, Firefox; registry on Windows) |
@@ -118,6 +118,34 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 - **Clipboard monitoring:** copying an http(s) link to a known file type
   offers to download it, so rdm still works without the extension. It can
   be turned off in Settings.
+
+## Streaming media (HLS / DASH)
+
+Paste a `.m3u8` or `.mpd` URL into Add, or pick a stream from the extension.
+rdm reads the playlist and offers each quality, the audio tracks and an
+output format (MP4, MKV, M4A, MP3).
+
+- **What's supported:** HLS master and media playlists (MPEG-TS or fMP4,
+  `EXT-X-BYTERANGE`, `EXT-X-MAP`, separate audio renditions), and static
+  single-period DASH (`SegmentTemplate` with `$Number$` or `$Time$`, with or
+  without `SegmentTimeline`, `SegmentList`, `SegmentBase`).
+- **Download:** segments are fetched in parallel through the same network
+  stack as everything else (cookies, Referer, speed limits, per-host caps)
+  into a `<file>.rdm-parts` folder. Stopping keeps them, and starting again
+  resumes.
+- **Encryption:** standard AES-128 HLS is decrypted. DRM (SAMPLE-AES,
+  FairPlay, Widevine, PlayReady, CENC) is refused before anything
+  downloads, reported as protected content. Live streams are not supported
+  yet.
+- **ffmpeg** is only needed to merge separate video and audio, to turn
+  MPEG-TS into MP4, or to extract audio. Single-track streams are joined
+  directly. Without ffmpeg, a TS stream is saved as `.ts`.
+- **Getting ffmpeg:** Settings → Media can download a static build into
+  rdm's own folder after you agree, and checks its published SHA-256 first:
+  - macOS: Martin Riedl's builds (GPLv3).
+  - Windows: Gyan's builds (GPLv3).
+  - Linux: use your package manager. The only zip-with-checksum Linux builds
+    are compiled `--enable-nonfree`, so rdm doesn't offer them.
 
 ## Using the CLI
 
@@ -243,10 +271,6 @@ simulated downloads, so you can work on the layout without building the app:
 python3 -m http.server 5174 --directory crates/rdm-gui/ui
 ```
 
-Later phases add more prerequisites:
-- **Phase 5 (media):** ffmpeg on `PATH`. If it's missing, rdm offers to
-  download it.
-
 ## Project rules
 
 - No `unsafe` code. The workspace sets `unsafe_code = "forbid"`. Positioned
@@ -271,8 +295,8 @@ Later phases add more prerequisites:
 | 2 | Mock server fault injection + integration tests | ✅ |
 | 3 | Tauri GUI, SQLite persistence, tray | ✅ |
 | 4 | MV3 extension + native messaging host | ✅ |
-| 5 | HLS/DASH + ffmpeg muxing | ⏳ |
-| 6 | Scheduler, import/export, checksums, AV hook, duplicates, drag-and-drop | |
+| 5 | HLS/DASH + ffmpeg muxing | ✅ |
+| 6 | Scheduler, import/export, checksums, AV hook, duplicates, drag-and-drop | ⏳ |
 | 7 | Packaging, signing docs, v0.1.0 release | |
 
 ## License

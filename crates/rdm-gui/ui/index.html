@@ -83,6 +83,21 @@
         </div>
       </label>
       <p class="probe-info" id="add-info" aria-live="polite"></p>
+      <div class="stream-options" id="add-stream" hidden>
+        <div class="grid3">
+          <label class="field"><span>Quality</span><select id="add-variant"></select></label>
+          <label class="field"><span>Audio</span><select id="add-audio"></select></label>
+          <label class="field"><span>Format</span>
+            <select id="add-format">
+              <option value="auto">Automatic (MP4)</option>
+              <option value="mp4">MP4</option>
+              <option value="mkv">MKV</option>
+              <option value="m4a">Audio only (M4A)</option>
+              <option value="mp3">Audio only (MP3)</option>
+            </select>
+          </label>
+        </div>
+      </div>
       <label class="field">
         <span>Save as</span>
         <input id="add-name" type="text" placeholder="Determined from the server" spellcheck="false">
@@ -155,6 +170,7 @@
         <button type="button" role="tab" data-tab="categories">Categories</button>
         <button type="button" role="tab" data-tab="queues">Queues</button>
         <button type="button" role="tab" data-tab="browser">Browser</button>
+        <button type="button" role="tab" data-tab="media">Media</button>
       </div>
 
       <section class="tab" data-tab="general">
@@ -213,6 +229,17 @@
           <button type="button" id="set-browsers-install">Register with all detected browsers</button>
         </div>
         <p class="error" id="set-browsers-error" role="alert"></p>
+      </section>
+
+      <section class="tab" data-tab="media" hidden>
+        <h3 class="subhead">ffmpeg</h3>
+        <p class="hint">Streams (HLS/DASH) with a single track are saved without extra tools. ffmpeg is used to merge separate video and audio, to turn MPEG-TS into MP4, and to extract MP3/M4A audio.</p>
+        <p id="ffmpeg-status" aria-live="polite">Checking…</p>
+        <div class="row">
+          <button type="button" id="ffmpeg-install" hidden>Download ffmpeg</button>
+        </div>
+        <p class="hint" id="ffmpeg-hint"></p>
+        <p class="error" id="ffmpeg-error" role="alert"></p>
       </section>
 
       <p class="error" id="set-error" role="alert"></p>

@@ -39,6 +39,10 @@ pub struct AddItem {
     pub user_agent: Option<String>,
     /// `Cookie` header value for `url`. Kept in memory by the app only.
     pub cookies: Option<String>,
+    /// What the extension detected: "video", "audio", "hls" or "dash".
+    pub kind: Option<String>,
+    /// The page title, used to name streams.
+    pub title: Option<String>,
 }
 
 /// What the app should do with added items.
