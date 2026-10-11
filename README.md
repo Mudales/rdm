@@ -4,13 +4,29 @@ A cross-platform (macOS, Windows, Linux) download manager written in Rust,
 inspired by Internet Download Manager and
 [ab-download-manager](https://github.com/amir1376/ab-download-manager).
 
-> **Status:** Phases 1–6 done: the download engine (`rdm-core`), the
+> **Status:** v0.1.0. Phases 1–7 done: the download engine (`rdm-core`), the
 > headless `rdm` CLI, the desktop app (`rdm-gui`, backed by `rdm-manager`),
 > browser integration (extension, `rdm-host`, `rdm-ipc`), streaming media
 > (`rdm-media`: HLS/DASH) and IDM-style extras (scheduler, import/export,
-> checksums, antivirus hook, duplicate detection, drag-and-drop). Packaging
-> and the first release come next.
+> checksums, antivirus hook, duplicate detection, drag-and-drop), packaged
+> for macOS, Windows and Linux.
 > See [Roadmap](#roadmap).
+
+## Install
+
+Download the installer for your system from the
+[Releases](https://github.com/Mudales/rdm/releases) page:
+
+- macOS: `.dmg` (one universal build for Apple Silicon and Intel)
+- Windows: `.msi` or `-setup.exe`
+- Linux: `.AppImage` or `.deb`
+- browser extension: `rdm-extension-*.zip`
+
+Release builds are currently **unsigned**.
+[docs/RELEASING.md](docs/RELEASING.md#installing-unsigned-builds) explains
+how to open them, and how to check the files against `SHA256SUMS`. After
+installing, open Settings → Browser → **Register**, then load the extension
+([extension/README.md](extension/README.md)).
 
 ## Architecture
 
@@ -325,7 +341,7 @@ python3 -m http.server 5174 --directory crates/rdm-gui/ui
 | 4 | MV3 extension + native messaging host | ✅ |
 | 5 | HLS/DASH + ffmpeg muxing | ✅ |
 | 6 | Scheduler, import/export, checksums, AV hook, duplicates, drag-and-drop | ✅ |
-| 7 | Packaging, signing docs, v0.1.0 release | ⏳ |
+| 7 | Packaging, signing docs, v0.1.0 release | ✅ |
 
 ## License
 
