@@ -29,6 +29,10 @@ pub struct Settings {
     pub clipboard_monitoring: bool,
     pub categories: Vec<Category>,
     pub queues: Vec<Queue>,
+    /// Command run on every finished download, e.g.
+    /// `clamscan --no-summary {file}`. `{file}` is replaced by the path
+    /// (appended if absent). Run directly, never through a shell.
+    pub antivirus: Option<String>,
 }
 
 /// Proxy choice. Credentials may be embedded in a custom URL
@@ -64,6 +68,38 @@ pub struct Queue {
     pub name: String,
     /// Downloads the queue runs at once.
     pub max_concurrent: u32,
+    #[serde(default)]
+    pub schedule: Schedule,
+    /// What happens when the running queue has nothing left to do.
+    #[serde(default)]
+    pub when_done: WhenDone,
+}
+
+/// When a queue starts and stops by itself (local time).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct Schedule {
+    pub enabled: bool,
+    /// `HH:MM`, 24-hour.
+    pub start: Option<String>,
+    /// `HH:MM`; stops the queue (downloads go back in line).
+    pub stop: Option<String>,
+    /// ISO weekdays, 1 = Monday … 7 = Sunday. Empty means every day.
+    pub days: Vec<u8>,
+    /// Run once, then disable the schedule.
+    pub once: bool,
+}
+
+/// Action when a queue finishes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum WhenDone {
+    #[default]
+    Nothing,
+    /// Quit rdm.
+    Quit,
+    /// Shut the computer down (after a cancellable countdown in the app).
+    Shutdown,
 }
 
 const DEFAULT_CATEGORIES: [(&str, &str); 6] = [
@@ -119,7 +155,10 @@ impl Settings {
                 id: MAIN_QUEUE,
                 name: "Main".into(),
                 max_concurrent: 3,
+                schedule: Schedule::default(),
+                when_done: WhenDone::Nothing,
             }],
+            antivirus: None,
         }
     }
 
@@ -179,6 +218,45 @@ impl Settings {
             if !ids.insert(q.id) {
                 return Err(format!("duplicate queue id {}", q.id));
             }
+            let s = &mut q.schedule;
+            for time in [&mut s.start, &mut s.stop] {
+                *time = time
+                    .take()
+                    .map(|t| t.trim().to_owned())
+                    .filter(|t| !t.is_empty());
+                if let Some(t) = time
+                    && crate::schedule::parse_clock(t).is_none()
+                {
+                    return Err(format!(
+                        "queue `{}`: `{t}` is not a time like 07:30",
+                        q.name
+                    ));
+                }
+            }
+            if s.days.iter().any(|d| !(1..=7).contains(d)) {
+                return Err(format!(
+                    "queue `{}`: days must be 1 (Monday) to 7 (Sunday)",
+                    q.name
+                ));
+            }
+            s.days.sort_unstable();
+            s.days.dedup();
+            if s.enabled && s.start.is_none() && s.stop.is_none() {
+                return Err(format!(
+                    "queue `{}`: a schedule needs a start or stop time",
+                    q.name
+                ));
+            }
+        }
+        self.antivirus = self
+            .antivirus
+            .take()
+            .map(|c| c.trim().to_owned())
+            .filter(|c| !c.is_empty());
+        if let Some(cmd) = &self.antivirus
+            && crate::antivirus::split_command(cmd).is_empty()
+        {
+            return Err("the antivirus command is empty".into());
         }
         if !ids.contains(&MAIN_QUEUE) {
             return Err("the main queue cannot be removed".into());

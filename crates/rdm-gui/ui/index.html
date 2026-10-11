@@ -33,6 +33,9 @@
     </button>
     <div class="spacer"></div>
     <input id="search" type="search" placeholder="Filter downloads" aria-label="Filter downloads">
+    <button id="btn-more" class="icon-only" title="Import, export and more" aria-label="More actions" aria-haspopup="menu">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="5" cy="12" r="1.6" class="fill"/><circle cx="12" cy="12" r="1.6" class="fill"/><circle cx="19" cy="12" r="1.6" class="fill"/></svg>
+    </button>
     <button id="btn-settings" class="icon-only" title="Settings" aria-label="Settings">
       <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
     </button>
@@ -83,6 +86,10 @@
         </div>
       </label>
       <p class="probe-info" id="add-info" aria-live="polite"></p>
+      <div class="note" id="add-duplicate" hidden>
+        <span id="add-duplicate-text"></span>
+        <label class="check"><input type="checkbox" id="add-allow-duplicate"> Download it again</label>
+      </div>
       <div class="stream-options" id="add-stream" hidden>
         <div class="grid3">
           <label class="field"><span>Quality</span><select id="add-variant"></select></label>
@@ -134,6 +141,7 @@
         <label class="field"><span>Referer</span><input id="add-referer" type="text" spellcheck="false"></label>
         <label class="field"><span>User-Agent</span><input id="add-ua" type="text" spellcheck="false"></label>
         <label class="field"><span>Cookies (kept in memory only)</span><input id="add-cookies" type="text" spellcheck="false" placeholder="name=value; other=value"></label>
+        <label class="field"><span>Expected checksum (verified when done)</span><input id="add-checksum" type="text" spellcheck="false" placeholder="sha-256:… or md5:… or plain hex"></label>
       </details>
       <p class="error" id="add-error" role="alert"></p>
       <div class="actions">
@@ -182,6 +190,17 @@
           </div>
         </label>
         <label class="check"><input type="checkbox" id="set-tray"> Closing the window keeps rdm running in the system tray</label>
+        <label class="field">
+          <span>Antivirus: scan every finished download with this command ({file} is the file; leave empty to turn off)</span>
+          <div class="row">
+            <input id="set-av" type="text" spellcheck="false" placeholder="clamscan --no-summary {file}">
+            <select id="set-av-preset" aria-label="Antivirus presets">
+              <option value="">Presets…</option>
+              <option value='"C:\Program Files\Windows Defender\MpCmdRun.exe" -Scan -ScanType 3 -DisableRemediation -File {file}'>Microsoft Defender (Windows)</option>
+              <option value="clamscan --no-summary {file}">ClamAV</option>
+            </select>
+          </div>
+        </label>
       </section>
 
       <section class="tab" data-tab="connection" hidden>
@@ -215,7 +234,7 @@
       </section>
 
       <section class="tab" data-tab="queues" hidden>
-        <p class="hint">"Add to queue" downloads wait in their queue and start when the queue is started, a few at a time.</p>
+        <p class="hint">"Add to queue" downloads wait in their queue and start when the queue is started, a few at a time. A schedule starts and stops a queue by itself (local time).</p>
         <div class="list-editor" id="set-queues"></div>
         <button type="button" id="set-add-queue">Add queue</button>
       </section>
@@ -250,6 +269,23 @@
       </div>
     </form>
   </dialog>
+
+  <!-- Shutdown countdown -->
+  <dialog id="dlg-countdown" aria-labelledby="dlg-countdown-title">
+    <form method="dialog">
+      <h2 id="dlg-countdown-title">Shutting down</h2>
+      <p id="countdown-text"></p>
+      <div class="actions">
+        <div class="spacer"></div>
+        <button value="cancel" class="primary" id="countdown-cancel">Cancel shutdown</button>
+        <button value="now" id="countdown-now">Shut down now</button>
+      </div>
+    </form>
+  </dialog>
+
+  <div class="drop-overlay" id="drop-overlay" hidden>
+    <div><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>Drop links or a list of URLs to download</div>
+  </div>
 
   <menu class="context" id="context" hidden role="menu"></menu>
   <div class="toasts" id="toasts" aria-live="polite"></div>

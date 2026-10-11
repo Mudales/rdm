@@ -22,17 +22,25 @@
 //! # Ok(()) }
 //! ```
 
+mod antivirus;
+mod checksum;
 mod error;
 mod manager;
 mod model;
+mod power;
+mod schedule;
 mod settings;
 mod store;
+mod transfer;
 
+pub use checksum::{Algorithm, Checksum, hash_file};
 pub use error::{Error, Result, error_chain};
 pub use manager::{FfmpegStatus, Manager};
 pub use model::{
     DownloadRecord, Id, LiveProgress, ManagerEvent, NewDownload, ProbeResult, QueueState,
     StartMode, Status, StreamChoice,
 };
+pub use power::shutdown_computer;
 pub use rdm_media::{FfmpegConfig, Manifest, OutputFormat};
-pub use settings::{Category, MAIN_QUEUE, ProxySetting, Queue, Settings};
+pub use settings::{Category, MAIN_QUEUE, ProxySetting, Queue, Schedule, Settings, WhenDone};
+pub use transfer::{ExportFormat, ImportReport};

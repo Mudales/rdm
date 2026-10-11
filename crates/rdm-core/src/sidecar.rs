@@ -202,6 +202,7 @@ mod tests {
             filename: "f".into(),
             etag: etag.map(Into::into),
             last_modified: lm.map(Into::into),
+            digest: None,
         }
     }
 

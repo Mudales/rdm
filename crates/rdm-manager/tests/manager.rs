@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use rdm_core::EngineConfig;
 use rdm_manager::{
-    DownloadRecord, FfmpegConfig, Id, MAIN_QUEUE, Manager, ManagerEvent, NewDownload, ProxySetting,
-    Queue, Settings, StartMode, Status,
+    DownloadRecord, Error, ExportFormat, FfmpegConfig, Id, MAIN_QUEUE, Manager, ManagerEvent,
+    NewDownload, ProxySetting, Queue, Settings, StartMode, Status, WhenDone,
 };
 use rdm_tests::{ErrorFault, MockConfig, MockServer, verify_file};
 
@@ -37,9 +37,11 @@ async fn open(dir: &Path) -> Manager {
     m
 }
 
+/// Most tests add the same URL several times on purpose.
 fn new(url: &str) -> NewDownload {
     NewDownload {
         url: url.into(),
+        allow_duplicate: true,
         ..NewDownload::default()
     }
 }
@@ -337,6 +339,8 @@ async fn settings_are_validated_and_queue_removal_moves_downloads() {
         id: 2,
         name: "Night".into(),
         max_concurrent: 1,
+        schedule: Default::default(),
+        when_done: Default::default(),
     });
     m.update_settings(s).unwrap();
     let mut n = new(&server.url());
@@ -442,4 +446,282 @@ async fn protected_streams_are_refused_when_probing() {
         .await
         .unwrap_err();
     assert!(err.to_string().contains("protected content"), "{err}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn duplicates_are_reported_unless_allowed() {
+    let server = mock(MIB, |_| {}).await;
+    let dir = tempfile::tempdir().unwrap();
+    let m = open(dir.path()).await;
+    let url = server.url();
+
+    let first = m.add(new(&url)).await.unwrap();
+    completed(&m, first.id).await;
+
+    let strict = NewDownload {
+        url: format!("{url}#again"),
+        ..NewDownload::default()
+    };
+    let probe = m.probe(&strict).await.unwrap();
+    assert_eq!(probe.duplicate.as_ref().map(|d| d.id), Some(first.id));
+    match m.add(strict.clone()).await {
+        Err(Error::Duplicate(existing)) => assert_eq!(existing.id, first.id),
+        other => panic!("{other:?}"),
+    }
+    let again = m
+        .add(NewDownload {
+            allow_duplicate: true,
+            ..strict
+        })
+        .await
+        .unwrap();
+    assert_ne!(
+        again.file_name, first.file_name,
+        "a second copy gets its own name"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn checksums_are_verified() {
+    let size = MIB;
+    let content = rdm_tests::expected_content(0, size);
+    let good = rdm_manager::Checksum {
+        algorithm: rdm_manager::Algorithm::Sha256,
+        hex: sha256_hex(&content),
+    };
+    let server = mock(size, |_| {}).await;
+    let dir = tempfile::tempdir().unwrap();
+    let m = open(dir.path()).await;
+
+    assert!(matches!(
+        m.add(NewDownload {
+            checksum: Some("md5:nope".into()),
+            ..new(&server.url())
+        })
+        .await,
+        Err(Error::InvalidChecksum(_))
+    ));
+
+    let ok = m
+        .add(NewDownload {
+            checksum: Some(good.to_string().to_uppercase().replace("SHA-256", "sha256")),
+            ..new(&server.url())
+        })
+        .await
+        .unwrap();
+    let ok = wait_for(&m, ok.id, "verified", |r| r.checksum_ok.is_some()).await;
+    assert_eq!((ok.status, ok.checksum_ok), (Status::Completed, Some(true)));
+
+    let bad = m
+        .add(NewDownload {
+            checksum: Some(format!("sha-256:{}", "0".repeat(64))),
+            ..new(&server.url())
+        })
+        .await
+        .unwrap();
+    let bad = wait_for(&m, bad.id, "verified", |r| r.checksum_ok.is_some()).await;
+    assert_eq!((bad.status, bad.checksum_ok), (Status::Failed, Some(false)));
+    assert!(bad.error.as_deref().unwrap().contains("checksum mismatch"));
+    assert!(bad.path().exists(), "the file is kept for inspection");
+
+    let hex = m
+        .compute_checksum(ok.id, rdm_manager::Algorithm::Sha256)
+        .await
+        .unwrap();
+    assert_eq!(hex, good.hex);
+}
+
+fn sha256_hex(data: &[u8]) -> String {
+    let dir = tempfile::tempdir().unwrap();
+    let f = dir.path().join("x");
+    std::fs::write(&f, data).unwrap();
+    rdm_manager::hash_file(&f, rdm_manager::Algorithm::Sha256).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn server_published_digest_is_verified_automatically() {
+    let size = MIB;
+    let content = rdm_tests::expected_content(0, size);
+    let digest = |bytes: &[u8]| {
+        let dir = tempfile::tempdir().unwrap();
+        let f = dir.path().join("x");
+        std::fs::write(&f, bytes).unwrap();
+        let hex = rdm_manager::hash_file(&f, rdm_manager::Algorithm::Sha256).unwrap();
+        let raw: Vec<u8> = (0..32)
+            .map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).unwrap())
+            .collect();
+        format!("sha-256=:{}:", rdm_tests::base64(&raw))
+    };
+    let server = mock(size, |c| {
+        c.extra_headers = vec![("Repr-Digest".into(), digest(&content))]
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let m = open(dir.path()).await;
+
+    let p = m.probe(&new(&server.url())).await.unwrap();
+    assert!(
+        p.server_checksum
+            .as_deref()
+            .unwrap()
+            .starts_with("sha-256:")
+    );
+    let r = m.add(new(&server.url())).await.unwrap();
+    let r = wait_for(&m, r.id, "verified", |r| r.checksum_ok.is_some()).await;
+    assert_eq!((r.status, r.checksum_ok), (Status::Completed, Some(true)));
+
+    // A server whose digest does not match what it sends is caught.
+    server.update(|c| c.extra_headers = vec![("Repr-Digest".into(), digest(b"something else"))]);
+    let r = m.add(new(&server.url())).await.unwrap();
+    let r = wait_for(&m, r.id, "verified", |r| r.checksum_ok.is_some()).await;
+    assert_eq!((r.status, r.checksum_ok), (Status::Failed, Some(false)));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn schedules_start_and_stop_queues() {
+    let server = mock(8 * MIB, |c| c.per_connection_rate = Some(MIB)).await;
+    let dir = tempfile::tempdir().unwrap();
+    let m = open(dir.path()).await;
+    let n = NewDownload {
+        start: StartMode::Queue,
+        ..new(&server.url())
+    };
+    let r = m.add(n).await.unwrap();
+
+    // Schedule 01:00–01:30 local time, once; then drive the clock across it.
+    let tz = jiff::tz::TimeZone::system();
+    let day = jiff::Zoned::now().date().tomorrow().unwrap();
+    let at = |h: i8, mi: i8| day.at(h, mi, 0, 0).to_zoned(tz.clone()).unwrap();
+    let mut s = m.settings();
+    s.queues[0].schedule = rdm_manager::Schedule {
+        enabled: true,
+        start: Some("01:00".into()),
+        stop: Some("01:30".into()),
+        days: vec![],
+        once: true,
+    };
+    m.update_settings(s).unwrap();
+
+    m.check_schedules_at(at(0, 59));
+    assert!(!m.queues()[0].running);
+    m.check_schedules_at(at(1, 0));
+    assert!(m.queues()[0].running, "started at 01:00");
+    wait_for(&m, r.id, "downloading", |r| r.status == Status::Downloading).await;
+
+    m.check_schedules_at(at(1, 30));
+    assert!(!m.queues()[0].running, "stopped at 01:30");
+    wait_for(&m, r.id, "back in line", |r| r.status == Status::Queued).await;
+    assert!(
+        !m.settings().queues[0].schedule.enabled,
+        "a one-time schedule disables itself"
+    );
+}
+
+#[cfg(unix)]
+#[tokio::test(flavor = "multi_thread")]
+async fn antivirus_hook_runs_on_finished_files() {
+    let server = mock(MIB, |_| {}).await;
+    let dir = tempfile::tempdir().unwrap();
+    let m = open(dir.path()).await;
+    let log = dir.path().join("scanned.txt");
+    let mut s = m.settings();
+    // Records the scanned path, then reports a "virus" for files ending in 2.
+    s.antivirus = Some(format!(
+        "sh -c 'echo \"$0\" >> {}; case \"$0\" in *2.bin) echo FOUND: Test-Signature; exit 1;; esac' {{file}}",
+        log.display()
+    ));
+    m.update_settings(s).unwrap();
+
+    let clean = m
+        .add(NewDownload {
+            file_name: Some("one.bin".into()),
+            ..new(&server.url())
+        })
+        .await
+        .unwrap();
+    let flagged = m
+        .add(NewDownload {
+            file_name: Some("two2.bin".into()),
+            ..new(&server.url())
+        })
+        .await
+        .unwrap();
+    let clean = wait_for(&m, clean.id, "scanned", |r| r.scan.is_some()).await;
+    let flagged = wait_for(&m, flagged.id, "scanned", |r| r.scan.is_some()).await;
+    assert!(clean.scan.unwrap().contains("no problems"));
+    let report = flagged.scan.unwrap();
+    assert!(
+        report.contains("exit 1") && report.contains("Test-Signature"),
+        "{report}"
+    );
+    let logged = std::fs::read_to_string(&log).unwrap();
+    assert!(logged.contains("one.bin") && logged.contains("two2.bin"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn import_and_export() {
+    let server = mock(MIB, |_| {}).await;
+    let dir = tempfile::tempdir().unwrap();
+    let m = open(dir.path()).await;
+    let base = format!("http://{}", server.addr());
+
+    let text = format!("# list\n{base}/a.zip\n{base}/b.pdf\n{base}/a.zip\nnot-a-url\n");
+    let report = m.import(&text, StartMode::Paused).await;
+    assert_eq!(
+        (report.added, report.duplicates, report.invalid.len()),
+        (2, 0, 1)
+    );
+    let again = m.import(&text, StartMode::Paused).await;
+    assert_eq!((again.added, again.duplicates), (0, 2));
+
+    let names: Vec<_> = m.list().into_iter().map(|r| r.file_name).collect();
+    assert_eq!(names, ["a.zip", "b.pdf"]);
+    let urls = m.export(ExportFormat::Urls, None);
+    assert_eq!(urls, format!("{base}/a.zip\n{base}/b.pdf\n"));
+
+    // JSON moves the list to another install.
+    let json = m.export(ExportFormat::Json, None);
+    let other_dir = tempfile::tempdir().unwrap();
+    let other = open(other_dir.path()).await;
+    let r = other.import(&json, StartMode::Paused).await;
+    assert_eq!(r.added, 2);
+    assert_eq!(other.list()[1].file_name, "b.pdf");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn finishing_queue_reports_its_action() {
+    let server = mock(MIB, |_| {}).await;
+    let dir = tempfile::tempdir().unwrap();
+    let m = open(dir.path()).await;
+    let mut s = m.settings();
+    s.queues[0].when_done = WhenDone::Shutdown;
+    m.update_settings(s).unwrap();
+    let mut events = m.subscribe();
+
+    for name in ["q1.bin", "q2.bin"] {
+        let n = NewDownload {
+            file_name: Some(name.into()),
+            start: StartMode::Queue,
+            ..new(&server.url())
+        };
+        m.add(n).await.unwrap();
+    }
+    m.start_queue(MAIN_QUEUE).unwrap();
+    let finished = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            if let Ok(ManagerEvent::QueueFinished {
+                queue_id,
+                when_done,
+                ..
+            }) = events.recv().await
+            {
+                return (queue_id, when_done);
+            }
+        }
+    })
+    .await
+    .expect("queue never finished");
+    assert_eq!(finished, (MAIN_QUEUE, WhenDone::Shutdown));
+    assert!(m.list().iter().all(|r| r.status == Status::Completed));
+    assert!(!m.queues()[0].running, "a finished queue stops");
 }

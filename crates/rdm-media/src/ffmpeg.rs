@@ -230,7 +230,14 @@ pub async fn install_ffmpeg(engine: &Engine, tools_dir: &Path) -> Result<PathBuf
 fn verify_and_extract(zip_path: &Path, expected: &str, target: &Path) -> Result<()> {
     let mut file = std::fs::File::open(zip_path).map_err(Error::io(zip_path))?;
     let mut hasher = Sha256::new();
-    std::io::copy(&mut file, &mut hasher).map_err(Error::io(zip_path))?;
+    let mut buf = vec![0u8; 1 << 16];
+    loop {
+        let n = std::io::Read::read(&mut file, &mut buf).map_err(Error::io(zip_path))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
     let actual: String = hasher
         .finalize()
         .iter()

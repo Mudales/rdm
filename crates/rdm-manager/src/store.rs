@@ -44,11 +44,15 @@ const MIGRATIONS: &[&str] = &[
      CREATE INDEX downloads_status ON downloads(status);",
     // 2: stream downloads
     "ALTER TABLE downloads ADD COLUMN stream TEXT;",
+    // 3: verification
+    "ALTER TABLE downloads ADD COLUMN checksum TEXT;
+     ALTER TABLE downloads ADD COLUMN checksum_ok INTEGER;
+     ALTER TABLE downloads ADD COLUMN scan TEXT;",
 ];
 
 const COLUMNS: &str = "id, url, file_name, directory, category_id, queue_id, status, error, \
      size, downloaded, resumable, referer, user_agent, connections, speed_limit, added_at, \
-     completed_at, position, stream";
+     completed_at, position, stream, checksum, checksum_ok, scan";
 
 #[derive(Debug)]
 pub(crate) struct Store {
@@ -134,8 +138,10 @@ impl Store {
         conn.execute(
             "INSERT INTO downloads (url, file_name, directory, category_id, queue_id, status,
                  error, size, downloaded, resumable, referer, user_agent, connections,
-                 speed_limit, added_at, completed_at, position, stream)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
+                 speed_limit, added_at, completed_at, position, stream, checksum, checksum_ok,
+                 scan)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17,
+                     ?18, ?19, ?20, ?21)",
             params![
                 r.url,
                 r.file_name,
@@ -155,6 +161,9 @@ impl Store {
                 r.completed_at,
                 r.position,
                 stream_json(r)?,
+                r.checksum,
+                r.checksum_ok,
+                r.scan,
             ],
         )?;
         Ok(conn.last_insert_rowid())
@@ -166,7 +175,7 @@ impl Store {
                  queue_id = ?6, status = ?7, error = ?8, size = ?9, downloaded = ?10,
                  resumable = ?11, referer = ?12, user_agent = ?13, connections = ?14,
                  speed_limit = ?15, added_at = ?16, completed_at = ?17, position = ?18,
-                 stream = ?19
+                 stream = ?19, checksum = ?20, checksum_ok = ?21, scan = ?22
              WHERE id = ?1",
             params![
                 r.id,
@@ -188,6 +197,9 @@ impl Store {
                 r.completed_at,
                 r.position,
                 stream_json(r)?,
+                r.checksum,
+                r.checksum_ok,
+                r.scan,
             ],
         )?;
         Ok(())
@@ -252,6 +264,9 @@ fn from_row(row: &Row<'_>) -> rusqlite::Result<Result<DownloadRecord>> {
         completed_at: row.get(16)?,
         position: row.get(17)?,
         stream,
+        checksum: row.get(19)?,
+        checksum_ok: row.get(20)?,
+        scan: row.get(21)?,
     }))
 }
 
@@ -284,6 +299,9 @@ mod tests {
                 label: Some("720p".into()),
                 ..Default::default()
             }),
+            checksum: Some("md5:5eb63bbbe01eeed093cb22bb8f5acdc3".into()),
+            checksum_ok: Some(true),
+            scan: None,
         }
     }
 

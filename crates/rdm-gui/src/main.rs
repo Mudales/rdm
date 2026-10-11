@@ -17,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::Context;
 use rdm_core::EngineConfig;
 use rdm_ipc::AddItem;
-use rdm_manager::Manager;
+use rdm_manager::{Manager, ManagerEvent, WhenDone};
 use tauri::async_runtime::block_on;
 use tauri::{AppHandle, Emitter, Manager as _, RunEvent, WindowEvent};
 use tokio::sync::broadcast::error::RecvError;
@@ -129,6 +129,11 @@ fn run() -> anyhow::Result<()> {
             commands::uninstall_browser_integration,
             commands::ffmpeg_status,
             commands::install_ffmpeg,
+            commands::export_list,
+            commands::import_list,
+            commands::import_text,
+            commands::compute_checksum,
+            commands::shutdown_computer,
         ])
         .build(tauri::generate_context!())
         .context("failed to start the user interface")?;
@@ -155,6 +160,19 @@ fn forward_events(app: AppHandle, manager: &Manager) {
             match rx.recv().await {
                 Ok(event) => {
                     let _ = app.emit(EVENT, &event);
+                    match &event {
+                        // "Quit when done": exit (progress is saved on Exit).
+                        ManagerEvent::QueueFinished {
+                            when_done: WhenDone::Quit,
+                            ..
+                        } => app.exit(0),
+                        // The UI shows a cancellable shutdown countdown.
+                        ManagerEvent::QueueFinished {
+                            when_done: WhenDone::Shutdown,
+                            ..
+                        } => show_main_window(&app),
+                        _ => {}
+                    }
                 }
                 Err(RecvError::Lagged(_)) => {
                     let _ = app.emit(RESYNC, ());

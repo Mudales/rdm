@@ -443,11 +443,39 @@ function renderDetails() {
       r.stream ? row('Stream', [r.stream.label ?? 'Best quality', r.stream.format !== 'auto' ? r.stream.format.toUpperCase() : null].filter(Boolean).join(' · ')) : null,
       row('Resumable', r.resumable == null ? 'Not known yet' : r.resumable ? 'Yes' : 'No — restarts from zero if interrupted'),
       row('Queue', queue(r.queueId)?.name ?? '—'),
+      r.checksum ? [h('dt', { text: 'Checksum' }), checksumCell(r)] : null,
+      r.scan ? row('Scan', r.scan) : null,
       r.error ? [h('dt', { text: 'Error' }), h('dd', { class: 'err', text: r.error })] : null,
     ),
   );
+  if (r.status === 'completed' && !r.checksum) {
+    $('.buttons', el).append(
+      h('button', {
+        text: 'SHA-256',
+        title: 'Compute the SHA-256 checksum of the file',
+        onclick: async (e) => {
+          e.target.disabled = true;
+          try {
+            const hex = await backend.invoke('compute_checksum', { id: r.id, algorithm: 'sha-256' });
+            toast(`SHA-256: ${hex}`);
+            copyText(hex);
+          } catch (err) {
+            toast(errorText(err), true);
+          } finally {
+            e.target.disabled = false;
+          }
+        },
+      }),
+    );
+  }
   details = { id: r.id, refs };
   updateDetailsLive();
+}
+
+function checksumCell(r) {
+  const [state, cls] =
+    r.checksumOk === true ? ['✓ verified', 'checksum-ok'] : r.checksumOk === false ? ['✗ mismatch', 'checksum-bad'] : r.status === 'completed' ? ['verifying…', ''] : ['checked when done', ''];
+  return h('dd', { title: r.checksum }, h('span', { class: cls, text: state }), ` ${r.checksum}`);
 }
 
 function updateDetailsLive() {
@@ -686,6 +714,8 @@ function openAdd(prefill = {}) {
   $('#add-referer').value = prefill.referer ?? prefill.pageUrl ?? '';
   $('#add-ua').value = prefill.userAgent ?? '';
   $('#add-cookies').value = prefill.cookies ?? '';
+  $('#add-checksum').value = '';
+  showDuplicate(null);
   $('#add-error').textContent = '';
   setProbeInfo('');
   fillSelect($('#add-category'), [['', 'Automatic (by extension)'], ...s.categories.map((c) => [c.id, c.name])], '');
@@ -700,6 +730,16 @@ function setProbeInfo(text, ok = false) {
   const el = $('#add-info');
   el.textContent = text;
   el.classList.toggle('ok', ok);
+}
+
+/** Warns that the download is already in the list. */
+function showDuplicate(record) {
+  $('#add-duplicate').hidden = !record;
+  $('#add-allow-duplicate').checked = false;
+  if (record) {
+    const status = { completed: 'finished', downloading: 'downloading', queued: 'queued', stopped: 'stopped', failed: 'failed' }[record.status] ?? record.status;
+    $('#add-duplicate-text').textContent = `Already in your list as “${record.fileName}” (${status}).`;
+  }
 }
 
 /** Shows the quality/audio/format pickers for a stream manifest (or hides them). */
@@ -744,6 +784,8 @@ function addRequest(start) {
     connections: numberOrNull($('#add-conns')),
     speedLimit: numberOrNull($('#add-limit'), 1024) || null,
     title: add.title,
+    checksum: text('#add-checksum'),
+    allowDuplicate: $('#add-allow-duplicate').checked,
     stream: add.stream
       ? {
           variant: $('#add-variant').value || null,
@@ -775,6 +817,7 @@ async function probe() {
     }
     if (!add.dirTouched) $('#add-dir').value = p.directory;
     showStreamOptions(p.stream ?? null);
+    showDuplicate(p.duplicate ?? null);
     if (p.stream) {
       const s = p.stream;
       const parts = [`${s.kind.toUpperCase()} stream`, `${s.variants.length} ${s.variants.length === 1 ? 'quality' : 'qualities'}`];
@@ -786,6 +829,7 @@ async function probe() {
     const parts = [p.size != null ? fmtBytes(p.size) : 'Size unknown'];
     if (p.contentType) parts.push(p.contentType.split(';')[0]);
     parts.push(p.resumable ? 'resumable, multi-connection' : 'not resumable (one connection)');
+    if (p.serverChecksum) parts.push('checksum published by the server');
     setProbeInfo(parts.join(' · '), true);
   } catch (e) {
     if (token !== add.probeToken) return;
@@ -846,7 +890,13 @@ async function submitAdd(start) {
     if (!matchesView(record)) state.view = 'all';
     scheduleRender();
   } catch (e) {
-    $('#add-error').textContent = errorText(e);
+    const message = errorText(e);
+    if (message.startsWith('already in the list')) {
+      $('#add-duplicate').hidden = false;
+      $('#add-duplicate-text').textContent = `${message[0].toUpperCase()}${message.slice(1)}.`;
+    } else {
+      $('#add-error').textContent = message;
+    }
   } finally {
     for (const b of $$('#dlg-add .actions button')) b.disabled = false;
   }
@@ -915,41 +965,76 @@ function renderCategoryEditor() {
   );
 }
 
+const WEEKDAYS = ['M', 'T', 'W', 'T', 'F', 'S', 'S'];
+
 function renderQueueEditor() {
   const box = $('#set-queues');
-  box.className = 'list-editor queues';
+  box.className = 'list-editor';
   box.replaceChildren(
-    ...draft.queues.map((q, i) =>
-      h(
+    ...draft.queues.map((q, i) => {
+      q.schedule ??= { enabled: false, start: null, stop: null, days: [], once: false };
+      q.whenDone ??= 'nothing';
+      const s = q.schedule;
+      const time = (key, label) =>
+        h('label', {}, `${label} `, h('input', { type: 'time', value: s[key] ?? '', 'aria-label': `${q.name} ${label}`, oninput: (e) => (s[key] = e.target.value || null) }));
+      return h(
         'div',
-        { class: 'item' },
-        h('input', { type: 'text', value: q.name, 'aria-label': 'Queue name', oninput: (e) => (q.name = e.target.value) }),
+        { class: 'queue-block' },
         h(
-          'label',
-          { class: 'check' },
-          'Runs',
-          h('input', {
-            type: 'number',
-            min: '1',
-            max: '32',
-            value: String(q.maxConcurrent),
-            'aria-label': 'Downloads at a time',
-            oninput: (e) => (q.maxConcurrent = Number(e.target.value)),
+          'div',
+          { class: 'item', style: 'display:grid;grid-template-columns:1fr 150px auto;gap:6px;align-items:center' },
+          h('input', { type: 'text', value: q.name, 'aria-label': 'Queue name', oninput: (e) => (q.name = e.target.value) }),
+          h('label', { class: 'check' }, 'Runs', h('input', { type: 'number', min: '1', max: '32', value: String(q.maxConcurrent), 'aria-label': 'Downloads at a time', oninput: (e) => (q.maxConcurrent = Number(e.target.value)) }), 'at once'),
+          h('button', {
+            type: 'button',
+            text: '✕',
+            title: q.id === MAIN_QUEUE ? 'The main queue cannot be removed' : 'Remove queue',
+            disabled: q.id === MAIN_QUEUE,
+            onclick: () => {
+              draft.queues.splice(i, 1);
+              renderQueueEditor();
+            },
           }),
-          'at once',
         ),
-        h('button', {
-          type: 'button',
-          text: '✕',
-          title: q.id === MAIN_QUEUE ? 'The main queue cannot be removed' : 'Remove queue',
-          disabled: q.id === MAIN_QUEUE,
-          onclick: () => {
-            draft.queues.splice(i, 1);
-            renderQueueEditor();
-          },
-        }),
-      ),
-    ),
+        h(
+          'div',
+          { class: 'sched' },
+          h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: s.enabled, onchange: (e) => (s.enabled = e.target.checked) }), 'Schedule'),
+          time('start', 'start'),
+          time('stop', 'stop'),
+          h(
+            'span',
+            { class: 'days', title: 'Days (none checked = every day)' },
+            WEEKDAYS.map((d, k) =>
+              h('label', {}, d, h('input', {
+                type: 'checkbox',
+                checked: s.days.includes(k + 1),
+                'aria-label': ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'][k],
+                onchange: (e) => {
+                  s.days = s.days.filter((x) => x !== k + 1);
+                  if (e.target.checked) s.days.push(k + 1);
+                },
+              })),
+            ),
+          ),
+          h('label', { class: 'check' }, h('input', { type: 'checkbox', checked: s.once, onchange: (e) => (s.once = e.target.checked) }), 'once'),
+          h(
+            'label',
+            {},
+            'When done ',
+            (() => {
+              const sel = h('select', { 'aria-label': `${q.name}: when done`, onchange: (e) => (q.whenDone = e.target.value) },
+                h('option', { value: 'nothing', text: 'do nothing' }),
+                h('option', { value: 'quit', text: 'quit rdm' }),
+                h('option', { value: 'shutdown', text: 'shut down the computer' }),
+              );
+              sel.value = q.whenDone;
+              return sel;
+            })(),
+          ),
+        ),
+      );
+    }),
   );
 }
 
@@ -960,7 +1045,7 @@ $('#set-add-category').addEventListener('click', () => {
 });
 $('#set-add-queue').addEventListener('click', () => {
   const id = Math.max(0, ...draft.queues.map((q) => q.id)) + 1;
-  draft.queues.push({ id, name: `Queue ${id}`, maxConcurrent: 1 });
+  draft.queues.push({ id, name: `Queue ${id}`, maxConcurrent: 1, schedule: { enabled: false, start: null, stop: null, days: [], once: false }, whenDone: 'nothing' });
   renderQueueEditor();
 });
 
@@ -968,6 +1053,7 @@ function openSettings() {
   draft = structuredClone(state.settings);
   $('#set-dir').value = draft.defaultDirectory;
   $('#set-tray').checked = draft.closeToTray;
+  $('#set-av').value = draft.antivirus ?? '';
   $('#set-clipboard').checked = draft.clipboardMonitoring;
   refreshFfmpeg();
   $('#set-browsers-error').textContent = '';
@@ -985,6 +1071,10 @@ function openSettings() {
 }
 
 $('#set-cancel').addEventListener('click', () => $('#dlg-settings').close());
+$('#set-av-preset').addEventListener('change', (e) => {
+  if (e.target.value) $('#set-av').value = e.target.value;
+  e.target.value = '';
+});
 
 function renderBrowsers(list) {
   $('#set-browsers').replaceChildren(
@@ -1073,6 +1163,7 @@ $('#form-settings').addEventListener('submit', async (e) => {
     ...draft,
     defaultDirectory: $('#set-dir').value.trim(),
     closeToTray: $('#set-tray').checked,
+    antivirus: $('#set-av').value.trim() || null,
     clipboardMonitoring: $('#set-clipboard').checked,
     connections: Number($('#set-conns').value),
     minSplit: Number($('#set-split').value) * 1024,
@@ -1086,6 +1177,110 @@ $('#form-settings').addEventListener('submit', async (e) => {
   } catch (err) {
     $('#set-error').textContent = errorText(err);
   }
+});
+
+// ---------------------------------------------------------------------------
+// More menu: import / export
+// ---------------------------------------------------------------------------
+
+function reportImport(r) {
+  if (!r) return;
+  const parts = [`Added ${r.added}`];
+  if (r.duplicates) parts.push(`${r.duplicates} already in the list`);
+  if (r.invalid.length) parts.push(`${r.invalid.length} skipped`);
+  toast(parts.join(' · '), r.added === 0 && r.invalid.length > 0);
+}
+
+$('#btn-more').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const sel = [...state.selected];
+  const item = (label, action, enabled = true) =>
+    h('li', {}, h('button', { text: label, disabled: !enabled, onclick: () => { hideContext(); action(); } }));
+  const exportTo = async (format, ids = null) => {
+    const path = await call('export_list', { format, ids });
+    if (path) toast(`Exported to ${path}`);
+  };
+  const menu = $('#context');
+  menu.replaceChildren(
+    item('Import list…', async () => reportImport(await call('import_list'))),
+    h('hr'),
+    item('Export list (rdm JSON)…', () => exportTo('json')),
+    item('Export URLs (text)…', () => exportTo('urls')),
+    item(`Export ${sel.length || ''} selected…`.replace('  ', ' '), () => exportTo('json', sel), sel.length > 0),
+  );
+  menu.hidden = false;
+  const r = e.currentTarget.getBoundingClientRect();
+  const w = menu.getBoundingClientRect().width;
+  menu.style.left = `${Math.max(8, r.right - w)}px`;
+  menu.style.top = `${r.bottom + 4}px`;
+});
+
+// ---------------------------------------------------------------------------
+// Shutdown countdown ("when the queue is done: shut down")
+// ---------------------------------------------------------------------------
+
+let countdownTimer = null;
+function startCountdown(queueName) {
+  const dlg = $('#dlg-countdown');
+  let left = 60;
+  const render = () => ($('#countdown-text').textContent = `Queue “${queueName}” finished. The computer will shut down in ${left} seconds.`);
+  render();
+  clearInterval(countdownTimer);
+  dlg.returnValue = '';
+  dlg.showModal();
+  countdownTimer = setInterval(() => {
+    left -= 1;
+    render();
+    if (left <= 0) dlg.close('now');
+  }, 1000);
+  dlg.addEventListener(
+    'close',
+    () => {
+      clearInterval(countdownTimer);
+      if (dlg.returnValue === 'now') call('shutdown_computer');
+      else toast('Shutdown cancelled.');
+    },
+    { once: true },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Drag and drop: links from a browser, or a .txt / .json list
+// ---------------------------------------------------------------------------
+
+const URL_RE = /https?:\/\/[^\s"'<>]+/g;
+let dragDepth = 0;
+const overlay = $('#drop-overlay');
+const acceptsDrop = (e) => [...(e.dataTransfer?.types ?? [])].some((t) => t === 'Files' || t === 'text/uri-list' || t === 'text/plain');
+
+document.addEventListener('dragenter', (e) => {
+  if (!acceptsDrop(e) || document.querySelector('dialog[open]')) return;
+  e.preventDefault();
+  dragDepth++;
+  overlay.hidden = false;
+});
+document.addEventListener('dragover', (e) => {
+  if (acceptsDrop(e)) e.preventDefault();
+});
+document.addEventListener('dragleave', () => {
+  dragDepth = Math.max(0, dragDepth - 1);
+  if (!dragDepth) overlay.hidden = true;
+});
+document.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  dragDepth = 0;
+  overlay.hidden = true;
+  if (document.querySelector('dialog[open]')) return;
+  const files = [...(e.dataTransfer?.files ?? [])].filter((f) => /\.(txt|json|lst|csv)$/i.test(f.name) && f.size < 5_000_000);
+  if (files.length) {
+    for (const f of files) reportImport(await call('import_text', { text: await f.text() }));
+    return;
+  }
+  const text = e.dataTransfer.getData('text/uri-list') || e.dataTransfer.getData('text/plain') || '';
+  const urls = [...new Set(text.match(URL_RE) ?? [])];
+  if (urls.length === 1) openAdd({ url: urls[0] });
+  else if (urls.length > 1) reportImport(await call('import_text', { text: urls.join('\n') }));
+  else toast('Nothing to download in what was dropped.', true);
 });
 
 // ---------------------------------------------------------------------------
@@ -1127,6 +1322,10 @@ function handleEvent({ type, data }) {
       break;
     case 'notice':
       toast(data.message);
+      break;
+    case 'queueFinished':
+      if (data.whenDone === 'shutdown') startCountdown(data.name);
+      else if (data.whenDone === 'nothing') toast(`Queue “${data.name}” finished.`);
       break;
   }
 }

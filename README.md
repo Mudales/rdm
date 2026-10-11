@@ -4,10 +4,12 @@ A cross-platform (macOS, Windows, Linux) download manager written in Rust,
 inspired by Internet Download Manager and
 [ab-download-manager](https://github.com/amir1376/ab-download-manager).
 
-> **Status:** Phases 1–5 done: the download engine (`rdm-core`), the
+> **Status:** Phases 1–6 done: the download engine (`rdm-core`), the
 > headless `rdm` CLI, the desktop app (`rdm-gui`, backed by `rdm-manager`),
-> browser integration (extension, `rdm-host`, `rdm-ipc`) and streaming media
-> (`rdm-media`: HLS/DASH). IDM-parity features come next.
+> browser integration (extension, `rdm-host`, `rdm-ipc`), streaming media
+> (`rdm-media`: HLS/DASH) and IDM-style extras (scheduler, import/export,
+> checksums, antivirus hook, duplicate detection, drag-and-drop). Packaging
+> and the first release come next.
 > See [Roadmap](#roadmap).
 
 ## Architecture
@@ -118,6 +120,32 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 - **Clipboard monitoring:** copying an http(s) link to a known file type
   offers to download it, so rdm still works without the extension. It can
   be turned off in Settings.
+
+## Scheduling, verification and other extras
+
+- **Scheduler:** each queue can start and stop at set local times on chosen
+  weekdays, daily or once. A start missed by more than two hours (computer
+  asleep, rdm closed) is skipped rather than firing late. When a queue
+  finishes, rdm can do nothing, quit, or shut the computer down after a
+  60-second countdown you can cancel.
+- **Import/export** (the ⋯ menu): an rdm JSON list or a plain URL list, for
+  everything or just the selection. Import takes either, plus any text with
+  one URL per line. Cookies are never exported.
+- **Checksums:**
+  - Enter an expected checksum (`sha-256:…`, `sha-1:…`, `md5:…`, `sha-512:…`
+    or bare hex) when adding a download.
+  - A checksum the server publishes in `Repr-Digest`, `Digest` or a full
+    response's `Content-MD5` is used automatically.
+  - A mismatch marks the download failed and keeps the file.
+  - "SHA-256" in the details pane hashes any finished file.
+- **Antivirus hook** (Settings → General): a command run on every finished
+  file, with `{file}` replaced by its path. It runs directly, never through
+  a shell, with a 10-minute timeout. Presets are included for Microsoft
+  Defender and ClamAV.
+- **Duplicate detection:** adding a URL that is already in the list, or a
+  file identical by name and size to a finished one, asks first.
+- **Drag-and-drop:** drop a link onto the window to open the Add dialog,
+  several links to queue them, or a `.txt`/`.json` list to import it.
 
 ## Streaming media (HLS / DASH)
 
@@ -296,8 +324,8 @@ python3 -m http.server 5174 --directory crates/rdm-gui/ui
 | 3 | Tauri GUI, SQLite persistence, tray | ✅ |
 | 4 | MV3 extension + native messaging host | ✅ |
 | 5 | HLS/DASH + ffmpeg muxing | ✅ |
-| 6 | Scheduler, import/export, checksums, AV hook, duplicates, drag-and-drop | ⏳ |
-| 7 | Packaging, signing docs, v0.1.0 release | |
+| 6 | Scheduler, import/export, checksums, AV hook, duplicates, drag-and-drop | ✅ |
+| 7 | Packaging, signing docs, v0.1.0 release | ⏳ |
 
 ## License
 

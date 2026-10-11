@@ -33,6 +33,17 @@ pub struct ProbeInfo {
     pub filename: String,
     pub etag: Option<String>,
     pub last_modified: Option<String>,
+    /// A checksum of the whole file published by the server, if any.
+    pub digest: Option<ContentDigest>,
+}
+
+/// A server-published checksum of the complete file.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContentDigest {
+    /// `md5`, `sha-1`, `sha-256` or `sha-512`.
+    pub algorithm: String,
+    /// Lower-case hex.
+    pub hex: String,
 }
 
 impl ProbeInfo {
@@ -63,7 +74,9 @@ pub(crate) async fn probe(client: &HttpClient) -> Result<(ProbeInfo, Option<Resp
                 .filter(|cr| cr.first == 0)
                 .ok_or_else(|| Error::Protocol("206 without a valid Content-Range".into()))?
                 .total;
-            let info = build_info(client.url(), &resp, total, total.is_some());
+            let mut info = build_info(client.url(), &resp, total, total.is_some());
+            // Content-MD5 on a 206 covers only the range; ignore it here.
+            info.digest = repr_digest(resp.headers());
             Ok((info, None))
         }
         StatusCode::OK => {
@@ -101,7 +114,81 @@ fn build_info(url: &Url, resp: &Response, size: Option<u64>, resumable: bool) ->
         content_type: http::header_str(headers, header::CONTENT_TYPE),
         etag: http::header_str(headers, header::ETAG),
         last_modified: http::header_str(headers, header::LAST_MODIFIED),
+        digest: repr_digest(headers).or_else(|| {
+            headers
+                .get("content-md5")
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| base64_decode(v.trim()))
+                .filter(|b| b.len() == 16)
+                .map(|b| ContentDigest {
+                    algorithm: "md5".into(),
+                    hex: to_hex(&b),
+                })
+        }),
     }
+}
+
+/// The strongest digest from `Repr-Digest` (RFC 9530, `sha-256=:b64:`) or
+/// the older `Digest` header (RFC 3230, `SHA-256=b64`).
+fn repr_digest(headers: &HeaderMap) -> Option<ContentDigest> {
+    const PREFERENCE: [(&str, usize); 4] =
+        [("sha-512", 64), ("sha-256", 32), ("sha-1", 20), ("md5", 16)];
+    let mut found: Vec<(String, Vec<u8>)> = Vec::new();
+    for name in ["repr-digest", "digest"] {
+        for value in headers.get_all(name).iter().filter_map(|v| v.to_str().ok()) {
+            for item in value.split(',') {
+                let Some((alg, val)) = item.split_once('=') else {
+                    continue;
+                };
+                let alg = match alg.trim().to_ascii_lowercase().as_str() {
+                    "sha" | "sha-1" => "sha-1".to_owned(),
+                    other => other.to_owned(),
+                };
+                let val = val.trim().trim_matches(':');
+                if let Some(bytes) = base64_decode(val) {
+                    found.push((alg, bytes));
+                }
+            }
+        }
+    }
+    PREFERENCE.iter().find_map(|(alg, len)| {
+        found
+            .iter()
+            .find(|(a, b)| a == alg && b.len() == *len)
+            .map(|(a, b)| ContentDigest {
+                algorithm: a.clone(),
+                hex: to_hex(b),
+            })
+    })
+}
+
+fn to_hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Standard base64 with optional padding; `None` on anything else.
+fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    let s = s.trim_end_matches('=');
+    let mut out = Vec::with_capacity(s.len() * 3 / 4);
+    let mut acc = 0u32;
+    let mut bits = 0;
+    for c in s.bytes() {
+        let v = match c {
+            b'A'..=b'Z' => c - b'A',
+            b'a'..=b'z' => c - b'a' + 26,
+            b'0'..=b'9' => c - b'0' + 52,
+            b'+' => 62,
+            b'/' => 63,
+            _ => return None,
+        };
+        acc = (acc << 6) | u32::from(v);
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
 }
 
 fn filename(headers: &HeaderMap, final_url: &Url) -> String {
@@ -296,6 +383,36 @@ mod tests {
     }
 
     #[test]
+    fn server_digests() {
+        let mut h = HeaderMap::new();
+        // sha-256 of "hello world"
+        h.insert(
+            "repr-digest",
+            "md5=:XrY7u+Ae7tCTyyK7j1rNww==:, sha-256=:uU0nuZNNPgilLlLX2n2r+sSE7+N6U4DukIj3rOLvzek=:"
+                .parse()
+                .unwrap(),
+        );
+        let d = repr_digest(&h).unwrap();
+        assert_eq!(d.algorithm, "sha-256");
+        assert_eq!(
+            d.hex,
+            "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+        );
+
+        let mut old = HeaderMap::new();
+        old.insert("digest", "MD5=XrY7u+Ae7tCTyyK7j1rNww==".parse().unwrap());
+        assert_eq!(
+            repr_digest(&old).unwrap().hex,
+            "5eb63bbbe01eeed093cb22bb8f5acdc3"
+        );
+
+        let mut bad = HeaderMap::new();
+        bad.insert("digest", "sha-256=not*base64".parse().unwrap());
+        assert_eq!(repr_digest(&bad), None);
+        assert_eq!(base64_decode("aGk="), Some(b"hi".to_vec()));
+    }
+
+    #[test]
     fn if_range_prefers_strong_etag() {
         let url = Url::parse("https://x.test/f").unwrap();
         let mut info = ProbeInfo {
@@ -308,6 +425,7 @@ mod tests {
             filename: "f".into(),
             etag: Some("\"abc\"".into()),
             last_modified: Some("Mon, 01 Jan 2024 00:00:00 GMT".into()),
+            digest: None,
         };
         assert_eq!(info.if_range(), Some("\"abc\""));
         info.etag = Some("W/\"abc\"".into());

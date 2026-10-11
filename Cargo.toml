@@ -38,6 +38,10 @@ dirs = "7"
 fastrand = "2"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 httpdate = "1"
+jiff = "0.2"
+md-5 = "0.11"
+sha1 = "0.11"
+sha2 = "0.11"
 percent-encoding = "2"
 # HTTP/1.1 only on purpose: HTTP/2 would multiplex every segment worker onto a
 # single TCP connection and erase the multi-connection speed-up. No gzip

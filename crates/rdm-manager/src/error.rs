@@ -30,6 +30,13 @@ pub enum Error {
     #[error("invalid settings: {0}")]
     InvalidSettings(String),
 
+    #[error("`{0}` is not a checksum (use sha-256:…, sha-1:…, md5:… or sha-512:…)")]
+    InvalidChecksum(String),
+
+    /// The URL (or an identical finished file) is already in the list.
+    #[error("already in the list as “{}”", .0.file_name)]
+    Duplicate(Box<crate::model::DownloadRecord>),
+
     #[error("I/O error on {}", path.display())]
     Io {
         path: PathBuf,

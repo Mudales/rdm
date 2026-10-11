@@ -16,7 +16,7 @@ mod server;
 use std::io::{self, Read};
 use std::path::Path;
 
-pub use faults::{ErrorFault, Faults};
+pub use faults::{ErrorFault, Faults, base64};
 pub use server::{MockConfig, MockServer, StaticFile};
 
 fn splitmix64(mut x: u64) -> u64 {

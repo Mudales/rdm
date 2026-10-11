@@ -88,7 +88,8 @@ pub(crate) fn basic_auth_value(user: &str, pass: &str) -> String {
     format!("Basic {}", base64(format!("{user}:{pass}").as_bytes()))
 }
 
-fn base64(input: &[u8]) -> String {
+/// Standard base64 with padding.
+pub fn base64(input: &[u8]) -> String {
     const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
     let mut out = String::with_capacity(input.len().div_ceil(3) * 4);
     for chunk in input.chunks(3) {

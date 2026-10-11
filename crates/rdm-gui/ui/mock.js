@@ -18,6 +18,7 @@ let settings = {
   proxy: { mode: 'system' },
   closeToTray: true,
   clipboardMonitoring: true,
+  antivirus: null,
   categories: [
     ['Video', 'mp4 mkv webm avi mov'],
     ['Music', 'mp3 m4a flac wav ogg'],
@@ -26,7 +27,7 @@ let settings = {
     ['Programs', 'exe msi apk deb rpm pkg'],
     ['Other', ''],
   ].map(([name, exts], i) => ({ id: i + 1, name, extensions: exts.split(' ').filter(Boolean), directory: `${home}/${name}` })),
-  queues: [{ id: 1, name: 'Main', maxConcurrent: 3 }],
+  queues: [{ id: 1, name: 'Main', maxConcurrent: 3, schedule: { enabled: true, start: '01:00', stop: '07:00', days: [1, 2, 3, 4, 5], once: false }, whenDone: 'nothing' }],
 };
 const running = new Set();
 
@@ -82,7 +83,7 @@ function startSim(r) {
 record('ubuntu-24.04.2-desktop-amd64.iso', 6_114_656_256, 'downloading', 0);
 record('Big.Buck.Bunny.1080p.mkv', 724 * MIB, 'downloading', 0);
 record('lecture-07-distributed-systems.mp4', 412 * MIB, 'queued', 0);
-record('Annual Report 2025.pdf', 8.4 * MIB, 'completed', 8.4 * MIB);
+record('Annual Report 2025.pdf', 8.4 * MIB, 'completed', 8.4 * MIB, { checksum: 'sha-256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08', checksumOk: true, scan: 'Scanned: no problems reported' });
 record('podcast-episode-142.mp3', 61 * MIB, 'completed', 61 * MIB);
 record('rustup-init.exe', 11 * MIB, 'failed', 3 * MIB, { error: 'server returned HTTP 403' });
 record('photos-backup.zip', 2.2 * 1024 * MIB, 'stopped', 900 * MIB);
@@ -185,6 +186,7 @@ const commands = {
         },
       };
     }
+    const duplicate = [...records.values()].find((r) => r.url === request.url) ?? null;
     const fileName = request.fileName ?? decodeURIComponent(request.url.split('/').pop() || 'download');
     const categoryId = request.categoryId ?? categoryFor(fileName);
     return {
@@ -196,6 +198,8 @@ const commands = {
       contentType: 'application/octet-stream',
       categoryId,
       directory: request.directory ?? settings.categories.find((c) => c.id === categoryId)?.directory ?? home,
+      duplicate,
+      serverChecksum: null,
     };
   },
   add_download: async ({ request }) => {
@@ -237,6 +241,15 @@ const commands = {
   show_in_folder: () => {},
   pick_folder: () => `${home}/Picked`,
   take_pending_adds: () => pending.splice(0),
+  export_list: ({ format }) => `${home}/rdm-downloads.${format === 'json' ? 'json' : 'txt'}`,
+  import_list: () => ({ added: 3, duplicates: 1, invalid: [] }),
+  import_text: ({ text }) => {
+    const urls = text.split(/\s+/).filter((u) => /^https?:/.test(u));
+    urls.forEach((u) => event('added', { ...record(decodeURIComponent(u.split('/').pop() || 'download'), null, 'queued', 0, { url: u }) }));
+    return { added: urls.length, duplicates: 0, invalid: [] };
+  },
+  compute_checksum: () => 'b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9',
+  shutdown_computer: () => {},
   ffmpeg_status: () => ffmpeg,
   install_ffmpeg: async () => {
     await delay(1500);
@@ -281,6 +294,9 @@ setTimeout(() => {
   });
   emit('rdm://add-request', null);
 }, 3000);
+
+// For poking the UI from the browser console: rdmMock.emit('notice', {message: 'hi'}).
+window.rdmMock = { emit: event };
 
 export const backend = {
   async invoke(cmd, args = {}) {

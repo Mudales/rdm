@@ -37,6 +37,8 @@ pub struct MockConfig {
     /// Send `Content-Length` (otherwise the body is chunked).
     pub content_length: bool,
     pub faults: Faults,
+    /// Extra response headers for the generated file (e.g. `Repr-Digest`).
+    pub extra_headers: Vec<(String, String)>,
     /// Fixed files served at exact paths (playlists, segments, keys), with
     /// range support. Every other path serves the generated file.
     pub files: Arc<HashMap<String, StaticFile>>,
@@ -61,6 +63,7 @@ impl MockConfig {
             content_disposition: None,
             content_length: true,
             faults: Faults::default(),
+            extra_headers: Vec::new(),
             files: Arc::default(),
         }
     }
@@ -374,6 +377,9 @@ async fn serve(
         }
     }
 
+    for (name, value) in &cfg.extra_headers {
+        resp = resp.header(name.as_str(), value.as_str());
+    }
     if method == Method::HEAD {
         return resp.body(Body::empty()).unwrap_or_default();
     }

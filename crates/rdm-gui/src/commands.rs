@@ -8,8 +8,8 @@ use std::sync::Arc;
 use rdm_host::install::{Browser, BrowserStatus, Installer};
 use rdm_ipc::AddItem;
 use rdm_manager::{
-    DownloadRecord, FfmpegStatus, Id, LiveProgress, Manager, NewDownload, ProbeResult, QueueState,
-    Settings, error_chain,
+    Algorithm, DownloadRecord, ExportFormat, FfmpegStatus, Id, ImportReport, LiveProgress, Manager,
+    NewDownload, ProbeResult, QueueState, Settings, StartMode, error_chain,
 };
 use tauri::{AppHandle, State};
 
@@ -199,4 +199,69 @@ pub async fn ffmpeg_status(manager: Mgr<'_>) -> CmdResult<FfmpegStatus> {
 #[tauri::command]
 pub async fn install_ffmpeg(manager: Mgr<'_>) -> CmdResult<FfmpegStatus> {
     manager.install_ffmpeg().await.map_err(msg)
+}
+
+/// Asks where to save, then writes the list (or the given downloads).
+/// Returns the path, or `None` if the user cancelled.
+#[tauri::command]
+pub async fn export_list(
+    app: AppHandle,
+    manager: Mgr<'_>,
+    format: ExportFormat,
+    ids: Option<Vec<Id>>,
+) -> CmdResult<Option<PathBuf>> {
+    let (name, ext) = match format {
+        ExportFormat::Json => ("rdm-downloads.json", "json"),
+        ExportFormat::Urls => ("rdm-downloads.txt", "txt"),
+    };
+    let Some(path) = app
+        .dialog()
+        .file()
+        .set_file_name(name)
+        .add_filter(ext.to_uppercase(), &[ext])
+        .blocking_save_file()
+        .and_then(|p| p.into_path().ok())
+    else {
+        return Ok(None);
+    };
+    let text = manager.export(format, ids.as_deref());
+    std::fs::write(&path, text).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(Some(path))
+}
+
+/// Asks for a file (rdm JSON or a list of URLs) and imports it.
+#[tauri::command]
+pub async fn import_list(app: AppHandle, manager: Mgr<'_>) -> CmdResult<Option<ImportReport>> {
+    let Some(path) = app
+        .dialog()
+        .file()
+        .add_filter("Download lists", &["json", "txt", "lst", "csv"])
+        .blocking_pick_file()
+        .and_then(|p| p.into_path().ok())
+    else {
+        return Ok(None);
+    };
+    let text = std::fs::read_to_string(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(Some(manager.import(&text, StartMode::Paused).await))
+}
+
+/// Imports dropped or pasted text: URLs go to the queue.
+#[tauri::command]
+pub async fn import_text(manager: Mgr<'_>, text: String) -> CmdResult<ImportReport> {
+    Ok(manager.import(&text, StartMode::Queue).await)
+}
+
+#[tauri::command]
+pub async fn compute_checksum(manager: Mgr<'_>, id: Id, algorithm: String) -> CmdResult<String> {
+    let algorithm =
+        Algorithm::parse(&algorithm).ok_or_else(|| format!("unknown algorithm `{algorithm}`"))?;
+    manager.compute_checksum(id, algorithm).await.map_err(msg)
+}
+
+/// Saves every download's progress, then powers the computer off. The UI
+/// only calls this after its cancellable countdown.
+#[tauri::command]
+pub async fn shutdown_computer(manager: Mgr<'_>) -> CmdResult<()> {
+    manager.shutdown().await;
+    rdm_manager::shutdown_computer().map_err(|e| format!("could not shut down: {e}"))
 }

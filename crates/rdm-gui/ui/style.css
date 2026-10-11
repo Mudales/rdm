@@ -281,6 +281,20 @@ details.advanced[open] { display: flex; flex-direction: column; gap: 10px; }
 h3.subhead { margin: 8px 0 0; font-size: 13px; }
 .list-editor .item button { padding: 6px 8px; }
 
+.note { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--warn); color: var(--text); background: var(--panel-2); }
+.list-editor.queues .item { grid-template-columns: 1fr 140px auto; }
+.queue-block { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--border); border-radius: 8px; }
+.queue-block .sched { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; color: var(--muted); }
+.queue-block .sched input[type=time] { width: auto; padding: 3px 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); }
+.queue-block .days { display: inline-flex; gap: 2px; }
+.queue-block .days label { display: inline-flex; flex-direction: column; align-items: center; font-size: 11px; }
+.queue-block select { width: auto; }
+.checksum-ok { color: var(--done); }
+.checksum-bad { color: var(--error); }
+.drop-overlay { position: fixed; inset: 0; z-index: 30; display: grid; place-items: center; background: rgba(37, 99, 235, 0.12); border: 3px dashed var(--accent); pointer-events: none; }
+.drop-overlay div { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 18px 26px; border-radius: 12px; background: var(--panel); box-shadow: var(--shadow); font-weight: 600; }
+.drop-overlay svg { width: 36px; height: 36px; color: var(--accent); }
+
 /* Context menu */
 menu.context {
   position: fixed;

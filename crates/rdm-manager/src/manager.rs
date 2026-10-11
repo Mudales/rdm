@@ -19,13 +19,18 @@ use tokio::runtime::Handle as Runtime;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
+use crate::antivirus;
+use crate::checksum::{self, Algorithm, Checksum};
 use crate::error::{Error, Result, error_chain};
 use crate::model::{
     DownloadRecord, Id, LiveProgress, ManagerEvent, NewDownload, ProbeResult, QueueState,
     StartMode, Status, StreamChoice,
 };
+use crate::schedule;
+use crate::settings::WhenDone;
 use crate::settings::{MAIN_QUEUE, Settings};
 use crate::store::Store;
+use crate::transfer::{self, ExportFormat, ImportReport};
 
 const DATABASE_FILE: &str = "rdm.sqlite3";
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(500);
@@ -69,7 +74,15 @@ struct State {
     /// Cookies are secrets, so they live in memory only.
     cookies: HashMap<Id, String>,
     next_position: i64,
+    /// Running queues that have started work since they were started; when
+    /// one runs dry its `when_done` action fires.
+    busy_queues: HashSet<u32>,
+    /// Wall-clock time of the last schedule check.
+    last_schedule_check: jiff::Zoned,
 }
+
+/// Schedule checks happen this often (in progress ticks).
+const SCHEDULE_EVERY_TICKS: u32 = 10;
 
 struct Active {
     control: RunControl,
@@ -201,6 +214,8 @@ impl Manager {
                 running_queues: HashSet::new(),
                 cookies: HashMap::new(),
                 next_position,
+                busy_queues: HashSet::new(),
+                last_schedule_check: jiff::Zoned::now(),
             }),
         });
         let ticker = runtime.spawn(ticker(Arc::downgrade(&inner)));
@@ -310,6 +325,7 @@ impl Manager {
             .as_deref()
             .map(rdm_core::sanitize_filename)
             .unwrap_or_else(|| info.filename.clone());
+        let duplicate = find_duplicate(&st, &new.url, Some(&name), info.size).cloned();
         let (file_name, category_id, directory) = placement(&st, new, &name);
         Ok(ProbeResult {
             url: info.url.to_string(),
@@ -321,6 +337,8 @@ impl Manager {
             category_id,
             directory,
             stream: None,
+            duplicate,
+            server_checksum: info.digest.map(|d| format!("{}:{}", d.algorithm, d.hex)),
         })
     }
 
@@ -335,6 +353,7 @@ impl Manager {
         let format = new.stream.as_ref().map(|c| c.format).unwrap_or_default();
         let name = stream_file_name(new, format);
         let st = self.inner.state();
+        let duplicate = find_duplicate(&st, &new.url, None, None).cloned();
         let (file_name, category_id, directory) = placement(&st, new, &name);
         Ok(ProbeResult {
             url: request.url.to_string(),
@@ -349,6 +368,8 @@ impl Manager {
             category_id,
             directory,
             stream: Some(manifest),
+            duplicate,
+            server_checksum: None,
         })
     }
 
@@ -380,6 +401,18 @@ impl Manager {
         if new.stream.is_none() && rdm_media::looks_like_stream(&new.url, None) {
             new.stream = Some(StreamChoice::default());
         }
+        let checksum = new
+            .checksum
+            .as_deref()
+            .map(str::trim)
+            .filter(|c| !c.is_empty())
+            .map(|c| Checksum::parse(c).ok_or_else(|| Error::InvalidChecksum(c.to_owned())))
+            .transpose()?;
+        if !new.allow_duplicate
+            && let Some(dup) = find_duplicate(&self.inner.state(), &new.url, None, None)
+        {
+            return Err(Error::Duplicate(Box::new(dup.clone())));
+        }
         let (name, size) = match (&new.file_name, &new.stream) {
             (Some(name), _) => (rdm_core::sanitize_filename(name), None),
             // Streams are named from the page title; the playlist is read
@@ -398,6 +431,11 @@ impl Manager {
         let inner = &self.inner;
         let mut guard = inner.state();
         let st = &mut *guard;
+        if !new.allow_duplicate
+            && let Some(dup) = find_duplicate(st, &new.url, Some(&name), size)
+        {
+            return Err(Error::Duplicate(Box::new(dup.clone())));
+        }
         let (file_name, category_id, directory) = placement(st, &new, &name);
         let queue_id = new
             .queue_id
@@ -426,6 +464,9 @@ impl Manager {
             completed_at: None,
             position: st.next_position,
             stream: new.stream.clone(),
+            checksum: checksum.map(|c| c.to_string()),
+            checksum_ok: None,
+            scan: None,
         };
         record.id = inner.store.insert(&record)?;
         st.next_position += 1;
@@ -600,6 +641,57 @@ impl Manager {
         Ok(())
     }
 
+    /// The list (or the given downloads) as rdm JSON or a URL list.
+    pub fn export(&self, format: ExportFormat, ids: Option<&[Id]>) -> String {
+        let st = self.inner.state();
+        let mut records: Vec<DownloadRecord> = st
+            .records
+            .values()
+            .filter(|r| ids.is_none_or(|ids| ids.contains(&r.id)))
+            .cloned()
+            .collect();
+        records.sort_by_key(|r| r.position);
+        transfer::export(&records, &st.settings, format)
+    }
+
+    /// Imports an rdm JSON export or a URL list. Duplicates are skipped.
+    pub async fn import(&self, text: &str, start: StartMode) -> ImportReport {
+        let settings = self.settings();
+        let (items, invalid) = transfer::parse_import(text, &settings, start);
+        let mut report = ImportReport {
+            invalid,
+            ..ImportReport::default()
+        };
+        for item in items {
+            let url = item.url.clone();
+            match self.add(item).await {
+                Ok(_) => report.added += 1,
+                Err(Error::Duplicate(_)) => report.duplicates += 1,
+                Err(e) => report.invalid.push(format!("{url}: {}", error_chain(&e))),
+            }
+        }
+        report
+    }
+
+    /// Hashes a finished download, e.g. to compare with a published value.
+    pub async fn compute_checksum(&self, id: Id, algorithm: Algorithm) -> Result<String> {
+        let path = self.get(id).ok_or(Error::NotFound(id))?.path();
+        let p = path.clone();
+        tokio::task::spawn_blocking(move || checksum::hash_file(&p, algorithm))
+            .await
+            .map_err(|e| Error::Io {
+                path: path.clone(),
+                source: std::io::Error::other(e),
+            })?
+            .map_err(Error::io(&path))
+    }
+
+    /// Runs the schedule check as if the clock read `now` (tests).
+    #[doc(hidden)]
+    pub fn check_schedules_at(&self, now: jiff::Zoned) {
+        self.inner.check_schedules(now);
+    }
+
     /// Shows a message to the user (as a [`ManagerEvent::Notice`]).
     pub fn notice(&self, message: impl Into<String>) {
         self.inner.emit(ManagerEvent::Notice {
@@ -748,6 +840,7 @@ impl Inner {
             waiting.sort_unstable();
             for (_, id) in waiting.into_iter().take(limit.saturating_sub(running)) {
                 self.start_or_fail(st, id);
+                st.busy_queues.insert(queue_id);
             }
         }
     }
@@ -760,7 +853,12 @@ impl Inner {
                 match rx.recv().await {
                     Ok(Event::Started {
                         info, segmented, ..
-                    }) => this.on_started(id, info.size, segmented),
+                    }) => this.on_started(
+                        id,
+                        info.size,
+                        segmented,
+                        info.digest.map(|d| format!("{}:{}", d.algorithm, d.hex)),
+                    ),
                     Ok(Event::Progress(p)) => this.on_progress(id, p),
                     Ok(Event::Warning(message)) => this.emit(ManagerEvent::Notice {
                         id: Some(id),
@@ -865,11 +963,15 @@ impl Inner {
         }
     }
 
-    fn on_started(&self, id: Id, size: Option<u64>, segmented: bool) {
+    fn on_started(&self, id: Id, size: Option<u64>, segmented: bool, digest: Option<String>) {
         let mut st = self.state();
         if let Some(r) = st.records.get_mut(&id) {
             r.size = size;
             r.resumable = Some(segmented);
+            // A checksum the server publishes is verified automatically.
+            if r.checksum.is_none() {
+                r.checksum = digest.filter(|d| Checksum::parse(d).is_some());
+            }
             self.save(r);
             self.emit(ManagerEvent::Updated(r.clone()));
         }
@@ -912,6 +1014,8 @@ impl Inner {
                     r.downloaded = size;
                     r.completed_at = Some(now());
                     r.error = None;
+                    r.checksum_ok = None;
+                    r.scan = None;
                     // Streams may end up with another extension (.ts, .mkv).
                     if let Some(name) = path.as_deref().and_then(Path::file_name) {
                         r.file_name = name.to_string_lossy().into_owned();
@@ -942,9 +1046,31 @@ impl Inner {
             updated = Some(r.clone());
         }
 
+        let verify = updated
+            .as_ref()
+            .filter(|r| r.status == Status::Completed)
+            .and_then(|r| {
+                (r.checksum.is_some() || st.settings.antivirus.is_some())
+                    .then(|| (r.path(), r.checksum.clone(), st.settings.antivirus.clone()))
+            });
         self.schedule(st);
+        let finished_queues = take_finished_queues(st);
         let queues = queue_states(st);
         drop(guard);
+
+        if let Some((path, checksum, antivirus)) = verify {
+            let this = self.clone();
+            self.runtime.spawn(async move {
+                this.verify(id, path, checksum, antivirus).await;
+            });
+        }
+        for (queue_id, name, when_done) in finished_queues {
+            self.emit(ManagerEvent::QueueFinished {
+                queue_id,
+                name,
+                when_done,
+            });
+        }
 
         if let Some((r, delete_file)) = removed {
             if delete_file {
@@ -958,7 +1084,133 @@ impl Inner {
         self.emit(ManagerEvent::Queues(queues));
     }
 
-    fn tick(&self, persist: bool) {
+    /// Checksum verification and the antivirus scan for a finished file.
+    async fn verify(
+        self: Arc<Self>,
+        id: Id,
+        path: PathBuf,
+        checksum: Option<String>,
+        antivirus: Option<String>,
+    ) {
+        if let Some(expected) = checksum.as_deref().and_then(Checksum::parse) {
+            let p = path.clone();
+            let actual =
+                tokio::task::spawn_blocking(move || checksum::hash_file(&p, expected.algorithm))
+                    .await
+                    .map_err(|e| e.to_string())
+                    .and_then(|r| r.map_err(|e| e.to_string()));
+            let mut st = self.state();
+            let Some(r) = st
+                .records
+                .get_mut(&id)
+                .filter(|r| r.status == Status::Completed)
+            else {
+                return;
+            };
+            match actual {
+                Ok(hex) if hex == expected.hex => r.checksum_ok = Some(true),
+                Ok(hex) => {
+                    r.checksum_ok = Some(false);
+                    r.status = Status::Failed;
+                    r.error = Some(format!(
+                        "checksum mismatch: expected {expected}, got {}:{hex}. The file was kept; it may be corrupt or tampered with.",
+                        expected.algorithm.name()
+                    ));
+                }
+                Err(e) => r.error = Some(format!("could not verify the checksum: {e}")),
+            }
+            self.save(r);
+            let r = r.clone();
+            drop(st);
+            self.emit(ManagerEvent::Updated(r.clone()));
+            if r.status != Status::Completed {
+                return;
+            }
+        }
+        if let Some(template) = antivirus {
+            let result = antivirus::scan(&template, &path).await;
+            let text = result.describe();
+            let mut st = self.state();
+            let Some(r) = st.records.get_mut(&id) else {
+                return;
+            };
+            r.scan = Some(text.clone());
+            self.save(r);
+            let r = r.clone();
+            drop(st);
+            self.emit(ManagerEvent::Updated(r.clone()));
+            if !matches!(result, antivirus::ScanResult::Clean) {
+                self.emit(ManagerEvent::Notice {
+                    id: Some(id),
+                    message: format!("{}: {text}", r.file_name),
+                });
+            }
+        }
+    }
+
+    /// Starts and stops scheduled queues whose time has come.
+    fn check_schedules(self: &Arc<Self>, now: jiff::Zoned) {
+        let mut guard = self.state();
+        let st = &mut *guard;
+        let from = std::mem::replace(&mut st.last_schedule_check, now.clone());
+        let mut settings_changed = false;
+        let mut queues_changed = false;
+        for qi in 0..st.settings.queues.len() {
+            let Some(q) = st.settings.queues.get(qi).cloned() else {
+                continue;
+            };
+            let s = &q.schedule;
+            if !s.enabled {
+                continue;
+            }
+            let hit = |t: &Option<String>| {
+                t.as_deref()
+                    .and_then(schedule::parse_clock)
+                    .is_some_and(|c| schedule::crossed(c, &s.days, &from, &now))
+            };
+            if hit(&s.start) && !st.running_queues.contains(&q.id) {
+                tracing::info!(queue = q.name, "scheduled start");
+                st.running_queues.insert(q.id);
+                self.schedule(st);
+                queues_changed = true;
+                if s.once && s.stop.is_none() {
+                    settings_changed |= disable_schedule(st, qi);
+                }
+            }
+            if hit(&s.stop) && st.running_queues.contains(&q.id) {
+                tracing::info!(queue = q.name, "scheduled stop");
+                st.running_queues.remove(&q.id);
+                st.busy_queues.remove(&q.id);
+                for (id, a) in st.active.iter_mut() {
+                    if st.records.get(id).is_some_and(|r| r.queue_id == q.id) {
+                        a.then = AfterStop::Queued;
+                        a.control.stop();
+                    }
+                }
+                queues_changed = true;
+                if s.once {
+                    settings_changed |= disable_schedule(st, qi);
+                }
+            }
+        }
+        let settings = settings_changed.then(|| st.settings.clone());
+        let queues = queues_changed.then(|| queue_states(st));
+        drop(guard);
+        if let Some(settings) = settings {
+            if let Err(e) = self.store.save_settings(&settings) {
+                tracing::error!("saving settings failed: {}", error_chain(&e));
+            }
+            self.emit(ManagerEvent::Settings(Box::new(settings)));
+        }
+        if let Some(q) = queues {
+            self.emit(ManagerEvent::Queues(q));
+        }
+    }
+
+    fn tick(self: &Arc<Self>, persist: bool, schedules: bool) {
+        if schedules {
+            self.check_schedules(jiff::Zoned::now());
+        }
         let mut guard = self.state();
         let st = &mut *guard;
         if st.active.is_empty() {
@@ -987,8 +1239,62 @@ async fn ticker(inner: Weak<Inner>) {
         interval.tick().await;
         let Some(inner) = inner.upgrade() else { return };
         n = n.wrapping_add(1);
-        inner.tick(n.is_multiple_of(PERSIST_EVERY_TICKS));
+        inner.tick(
+            n.is_multiple_of(PERSIST_EVERY_TICKS),
+            n.is_multiple_of(SCHEDULE_EVERY_TICKS),
+        );
     }
+}
+
+/// Running queues that had work and now have nothing running or waiting.
+/// They stop, and their `when_done` action is reported.
+fn take_finished_queues(st: &mut State) -> Vec<(u32, String, WhenDone)> {
+    let mut done = Vec::new();
+    for q in &st.settings.queues {
+        if !st.busy_queues.contains(&q.id) || !st.running_queues.contains(&q.id) {
+            continue;
+        }
+        let idle = !st.records.values().any(|r| {
+            r.queue_id == q.id && (st.active.contains_key(&r.id) || r.status == Status::Queued)
+        });
+        if idle {
+            done.push((q.id, q.name.clone(), q.when_done));
+        }
+    }
+    for (id, ..) in &done {
+        st.busy_queues.remove(id);
+        st.running_queues.remove(id);
+    }
+    done
+}
+
+fn disable_schedule(st: &mut State, index: usize) -> bool {
+    match st.settings.queues.get_mut(index) {
+        Some(q) if q.schedule.enabled => {
+            q.schedule.enabled = false;
+            true
+        }
+        _ => false,
+    }
+}
+
+/// An existing download of the same URL (ignoring `#fragment`), or a
+/// finished one with the same file name and size.
+fn find_duplicate<'a>(
+    st: &'a State,
+    url: &str,
+    name: Option<&str>,
+    size: Option<u64>,
+) -> Option<&'a DownloadRecord> {
+    let strip = |u: &str| u.split('#').next().unwrap_or_default().to_owned();
+    let url = strip(url);
+    st.records.values().find(|r| {
+        strip(&r.url) == url
+            || (r.status == Status::Completed
+                && size.is_some()
+                && r.size == size
+                && name.is_some_and(|n| r.file_name == n))
+    })
 }
 
 fn live_progress(st: &State) -> Vec<LiveProgress> {

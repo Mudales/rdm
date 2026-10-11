@@ -77,6 +77,12 @@ pub struct DownloadRecord {
     pub position: i64,
     /// Set for HLS/DASH streams: which rendition and output format.
     pub stream: Option<StreamChoice>,
+    /// Expected checksum (`sha-256:hex`), from the user or the server.
+    pub checksum: Option<String>,
+    /// Whether the finished file matched `checksum` (None: not checked yet).
+    pub checksum_ok: Option<bool>,
+    /// Antivirus scan result, when a scanner is configured.
+    pub scan: Option<String>,
 }
 
 /// How to download a streaming playlist.
@@ -140,6 +146,11 @@ pub struct NewDownload {
     pub stream: Option<StreamChoice>,
     /// Page title, used to name streams (whose URLs say "master.m3u8").
     pub title: Option<String>,
+    /// Expected checksum: `sha-256:…`, `md5:…` or bare hex.
+    pub checksum: Option<String>,
+    /// Add even if the URL (or an identical finished file) is already in
+    /// the list.
+    pub allow_duplicate: bool,
 }
 
 /// Result of probing a URL for the Add dialog.
@@ -157,6 +168,10 @@ pub struct ProbeResult {
     pub directory: PathBuf,
     /// For streaming playlists: the renditions to choose from.
     pub stream: Option<Manifest>,
+    /// An existing download of the same URL or file, if any.
+    pub duplicate: Option<DownloadRecord>,
+    /// A checksum published by the server, verified automatically.
+    pub server_checksum: Option<String>,
 }
 
 /// Live progress of a running download.
@@ -206,5 +221,12 @@ pub enum ManagerEvent {
     Notice {
         id: Option<Id>,
         message: String,
+    },
+    /// A running queue ran out of work; the app performs `when_done`.
+    #[serde(rename_all = "camelCase")]
+    QueueFinished {
+        queue_id: u32,
+        name: String,
+        when_done: crate::settings::WhenDone,
     },
 }
