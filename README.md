@@ -4,8 +4,9 @@ A cross-platform (macOS, Windows, Linux) download manager written in Rust,
 inspired by Internet Download Manager and
 [ab-download-manager](https://github.com/amir1376/ab-download-manager).
 
-> **Status:** Phase 0 (scaffold). The workspace, lints and CI are in place;
-> the download engine is not implemented yet. See [Roadmap](#roadmap).
+> **Status:** Phase 1 done. The download engine (`rdm-core`) and the headless
+> `rdm` CLI work; the GUI, browser integration and streaming media come next.
+> See [Roadmap](#roadmap).
 
 ## Architecture
 
@@ -83,11 +84,77 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 ./scripts/check-deps.sh
 ```
 
-Run the CLI:
+## Using the CLI
 
 ```bash
-cargo run -p rdm-cli -- --help
+cargo install --path crates/rdm-cli
 ```
+
+```bash
+rdm get https://example.com/big.iso -c 8 --limit 5M
+```
+
+- `-o PATH` saves to a file, or into a directory under the server's file
+  name. The default is the current directory.
+- Ctrl-C stops and keeps progress. Running the same command again (or
+  `rdm resume <file>`) continues from where it stopped, after checking that
+  the server's file hasn't changed (ETag / Last-Modified / size).
+- `rdm probe URL` shows the size, whether the server supports resuming, the
+  file name and the validators, without downloading anything.
+- The cookie, Referer, User-Agent, Basic auth and proxy options are listed in
+  `rdm get --help`.
+
+### Reproducing the speed benchmark
+
+`mock-server` serves deterministic content and can cap each connection's
+speed. That cap is the situation where multiple connections help:
+
+```bash
+cargo run --release -p rdm-tests --bin mock-server -- --size 1G --rate 25M
+```
+
+```bash
+cargo run --release -p rdm-cli -- get http://127.0.0.1:8080/file.bin -o one.bin -c 1 --no-proxy
+```
+
+```bash
+cargo run --release -p rdm-cli -- get http://127.0.0.1:8080/file.bin -o eight.bin -c 8 --no-proxy
+```
+
+```bash
+cargo run --release -p rdm-tests --bin mock-server -- --verify eight.bin --size 1G
+```
+
+On an M-series Mac this took 41.4 s with one connection and 5.2 s with
+eight. A `kill -9` partway through, followed by a re-run, produced a file
+with the same SHA-256.
+
+## How the engine works
+
+- **Probe:** a `GET` with `Range: bytes=0-0`. A `206` reply gives the size
+  and shows that ranges work. With a `200`, the body is reused for a single
+  stream, so one-time links still work.
+- **Dynamic segmentation:** a connection that finishes takes over the
+  second half of the largest range still in progress. Ranges are never split
+  below `--min-split` (1 MiB by default).
+- **HTTP/1.1 only:** with HTTP/2, all the connections would share one TCP
+  stream and the speed-up would disappear.
+- **One output file:** every connection writes at its final offset with
+  `pwrite` / `seek_write`. No part files are concatenated at the end.
+- **Crash safety:** the file data is `fsync`'d *before* `<file>.rdm` (which
+  lists the completed ranges) is atomically replaced. A crash can lose
+  recent progress but never marks unwritten bytes as complete. Cookies and
+  credentials are never written to disk.
+- **Resource changes:** every range request carries `If-Range`, so a server
+  whose file changed answers `200` rather than mixing old and new bytes.
+- **Retries:** exponential backoff with jitter, honouring `Retry-After`.
+  Counters are per connection and reset whenever that connection makes
+  progress.
+- **Throttling:** token buckets per download and global. A connection that
+  is over its limit stops reading the socket, so the limit applies on the
+  network, not just to disk writes.
+- **Politeness:** a per-host connection cap (16 by default) applies across
+  all downloads.
 
 Later phases add more prerequisites:
 - **Phase 3 (GUI):** the Tauri v2 system dependencies. On Linux that's
@@ -117,8 +184,8 @@ Later phases add more prerequisites:
 | Phase | Scope | Status |
 |---|---|---|
 | 0 | Workspace, lints, CI, README | ✅ |
-| 1 | `rdm-core` engine + `rdm-cli` | ⏳ |
-| 2 | Mock server + integration tests | |
+| 1 | `rdm-core` engine + `rdm-cli` | ✅ |
+| 2 | Mock server fault injection + integration tests | ⏳ |
 | 3 | Tauri GUI, SQLite persistence, tray | |
 | 4 | MV3 extension + native messaging host | |
 | 5 | HLS/DASH + ffmpeg muxing | |

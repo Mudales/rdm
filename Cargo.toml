@@ -23,10 +23,23 @@ authors = ["rdm contributors"]
 rdm-core = { path = "crates/rdm-core" }
 rdm-media = { path = "crates/rdm-media" }
 
+rdm-tests = { path = "tests" }
+
 anyhow = "1.0.100"
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+bytes = "1"
 clap = { version = "4.5", features = ["derive"] }
+fastrand = "2"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+httpdate = "1"
+percent-encoding = "2"
+# HTTP/1.1 only on purpose: HTTP/2 would multiplex every segment worker onto a
+# single TCP connection and erase the multi-connection speed-up. No gzip
+# features either: segments must be raw bytes at exact offsets.
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "cookies", "socks", "system-proxy"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+tempfile = "3"
 thiserror = "2.0"
 tokio = { version = "1.47", default-features = false }
 tracing = "0.1.41"
