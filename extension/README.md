@@ -82,7 +82,7 @@ browser APIs: media classification, link filtering and download capture
 rules. Its cases in [`test/cases.mjs`](test/cases.mjs) run under Node:
 
 ```bash
-node --test extension/test/
+node --test extension/test/*.test.mjs
 ```
 
 They also run in a browser. Serve this folder and open `test/index.html`:

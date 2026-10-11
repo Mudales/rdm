@@ -1,4 +1,4 @@
-// Runs the shared cases under Node's test runner: `node --test extension/test/`.
+// Runs the shared cases under Node's test runner: `node --test extension/test/*.test.mjs`.
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { cases } from './cases.mjs';
