@@ -14,11 +14,9 @@ use tokio::process::Command;
 
 fn endpoint_for(dir: &tempfile::TempDir) -> String {
     if cfg!(windows) {
-        format!(
-            "rdm-host-test-{}-{}",
-            std::process::id(),
-            dir.path().display().to_string().len()
-        )
+        // The temp folder's random name keeps parallel tests apart.
+        let unique = dir.path().file_name().unwrap().to_string_lossy();
+        format!("rdm-host-test-{}-{unique}", std::process::id())
     } else {
         dir.path()
             .join("ipc")
