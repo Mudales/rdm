@@ -358,9 +358,13 @@ async fn per_host_connection_cap_is_respected() {
         .unwrap();
     completed(a).await;
     completed(b).await;
+    // Two downloads asked for 8 connections each; a broken limiter shows up
+    // to 16. The server notices a connection the client dropped (a segment
+    // split by another worker) slightly after the client has released its
+    // slot and opened the next one, so one extra may be observed.
     assert!(
-        server.peak_connections() <= 2,
-        "peak was {}",
+        server.peak_connections() <= 3,
+        "peak was {}, cap is 2",
         server.peak_connections()
     );
     assert_content(&dir.path().join("a"), 0, size);

@@ -490,11 +490,22 @@ struct StreamState {
     started: Instant,
     stalled: bool,
     finished: bool,
+    /// Whether this response still counts toward `active`.
+    counted: bool,
+}
+
+impl StreamState {
+    /// Stops counting this response as active (once).
+    fn uncount(&mut self) {
+        if std::mem::replace(&mut self.counted, false) {
+            self.shared.stats.active.fetch_sub(1, Ordering::Relaxed);
+        }
+    }
 }
 
 impl Drop for StreamState {
     fn drop(&mut self) {
-        self.shared.stats.active.fetch_sub(1, Ordering::Relaxed);
+        self.uncount();
     }
 }
 
@@ -512,6 +523,7 @@ fn body_stream(
         started: Instant::now(),
         stalled: false,
         finished: false,
+        counted: true,
     };
     futures_util::stream::unfold(state, |mut st| async move {
         if st.finished || st.pos >= st.plan.end {
@@ -555,6 +567,11 @@ fn body_stream(
         let mut buf = vec![0u8; len as usize];
         crate::fill(st.plan.seed, st.pos, &mut buf);
         st.pos += len;
+        if st.pos >= st.plan.end {
+            // Done before the client can see the last byte, so a client that
+            // immediately reuses its connection slot is not double-counted.
+            st.uncount();
+        }
         st.sent += len;
         st.shared
             .stats
