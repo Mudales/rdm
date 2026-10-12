@@ -69,6 +69,8 @@
   let host = null;
   let ui = null;
   let current = null; // the video the button is attached to
+  /** Videos whose button the user closed (until the page reloads). */
+  const dismissed = new WeakSet();
   let hideTimer = null;
   let menuOpen = false;
 
@@ -80,14 +82,23 @@
       <style>
         :host { all: initial; }
         * { box-sizing: border-box; font: 13px/1.35 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif; }
+        .bar { position: fixed; display: none; align-items: center; gap: 4px; }
         .btn {
-          position: fixed; display: none; align-items: center; gap: 6px;
+          display: inline-flex; align-items: center; gap: 6px;
           padding: 5px 10px 5px 8px; border: 0; border-radius: 999px; cursor: pointer;
           background: rgba(37, 99, 235, 0.95); color: #fff; font-weight: 600;
           box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
         }
         .btn.protected { background: rgba(75, 85, 99, 0.95); cursor: help; }
         .btn svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 2.4; stroke-linecap: round; stroke-linejoin: round; }
+        .close {
+          display: inline-grid; place-items: center; width: 22px; height: 22px; padding: 0;
+          border: 0; border-radius: 50%; cursor: pointer;
+          background: rgba(17, 24, 39, 0.8); color: #fff; opacity: 0.75;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+        .close:hover { opacity: 1; }
+        .close svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; }
         .menu {
           position: fixed; display: none; min-width: 280px; max-width: 420px; max-height: 320px; overflow: auto;
           padding: 6px; border-radius: 10px; background: #1f2430; color: #e6e9ef;
@@ -102,13 +113,20 @@
         .note { padding: 8px; color: #98a2b3; }
         .note.error { color: #f87171; }
       </style>
-      <button class="btn" part="button" type="button">
-        <svg class="icon-dl" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
-        <svg class="icon-lock" viewBox="0 0 24 24" style="display:none"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
-        <span>Download</span>
-      </button>
+      <div class="bar">
+        <button class="btn" part="button" type="button">
+          <svg class="icon-dl" viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>
+          <svg class="icon-lock" viewBox="0 0 24 24" style="display:none"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+          <span>Download</span>
+        </button>
+        <button class="close" type="button" title="Hide for this video" aria-label="Hide the Download button for this video">
+          <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg>
+        </button>
+      </div>
       <div class="menu" role="menu"></div>`;
     ui = {
+      bar: root.querySelector('.bar'),
+      close: root.querySelector('.close'),
       btn: root.querySelector('.btn'),
       label: root.querySelector('.btn span'),
       iconDownload: root.querySelector('.icon-dl'),
@@ -121,7 +139,13 @@
       if (current && isProtected(current)) return;
       menuOpen ? closeMenu() : openMenu();
     });
-    for (const el of [ui.btn, ui.menu]) {
+    ui.close.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (current) dismissed.add(current);
+      hide();
+    });
+    for (const el of [ui.bar, ui.menu]) {
       el.addEventListener('mouseenter', () => clearTimeout(hideTimer));
       el.addEventListener('mouseleave', scheduleHide);
     }
@@ -137,14 +161,14 @@
     }
     const top = Math.max(8, r.top + 10);
     const right = Math.max(8, innerWidth - r.right + 10);
-    ui.btn.style.top = `${top}px`;
-    ui.btn.style.right = `${right}px`;
+    ui.bar.style.top = `${top}px`;
+    ui.bar.style.right = `${right}px`;
     ui.menu.style.top = `${top + 36}px`;
     ui.menu.style.right = `${right}px`;
   }
 
   function show(video) {
-    if (!enabled) return;
+    if (!enabled || dismissed.has(video)) return;
     if (!host) build();
     if (current !== video) closeMenu();
     current = video;
@@ -156,13 +180,13 @@
     ui.btn.title = prot
       ? 'This video is DRM-protected. rdm does not download protected content.'
       : 'Download this video with rdm';
-    ui.btn.style.display = 'inline-flex';
+    ui.bar.style.display = 'flex';
     place();
     clearTimeout(hideTimer);
   }
 
   function hide() {
-    if (ui) ui.btn.style.display = 'none';
+    if (ui) ui.bar.style.display = 'none';
     closeMenu();
     current = null;
   }
