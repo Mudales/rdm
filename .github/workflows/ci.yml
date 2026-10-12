@@ -82,6 +82,16 @@ jobs:
       - name: shellcheck install.sh
         if: runner.os == 'Linux'
         run: shellcheck --shell=sh scripts/install.sh
+      - name: Install scripts are plain ASCII
+        if: runner.os == 'Linux'
+        # macOS runs `sh` as bash 3.2, which in UTF-8 locales reads a
+        # multibyte character right after `$NAME` as part of the name
+        # ("VERSION…: unbound variable"); Windows PowerShell 5.1 misreads
+        # UTF-8 without a BOM.
+        run: "! LC_ALL=C grep -n -P '[^\\x00-\\x7F]' scripts/install.sh scripts/install.ps1"
+      - name: Run install.sh under a C locale (bash as sh)
+        if: runner.os == 'Linux'
+        run: LC_ALL=C bash --posix scripts/install.sh --help >/dev/null
       - name: Parse install.ps1 (Windows PowerShell 5.1)
         if: runner.os == 'Windows'
         shell: powershell

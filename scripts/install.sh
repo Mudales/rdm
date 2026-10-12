@@ -137,7 +137,7 @@ verify() {
   [ "$actual" = "$expected" ] || die "checksum mismatch for $1: the download is damaged or was altered"
 }
 
-say "Installing rdm $VERSION…"
+say "Installing rdm $VERSION..."
 fetch SHA256SUMS
 
 # --- macOS -------------------------------------------------------------------
@@ -158,7 +158,7 @@ if [ "$OS" = Darwin ]; then
 
   # Quit this copy if it is running (progress is saved on quit).
   if pgrep -f "$dest/rdm.app/Contents/MacOS/" >/dev/null 2>&1; then
-    say "Closing the running rdm…"
+    say "Closing the running rdm..."
     osascript -e 'quit app "rdm"' >/dev/null 2>&1 || true
     sleep 2
   fi
@@ -239,7 +239,7 @@ if [ "$BROWSER" -eq 1 ] && [ -n "${HOST:-}" ] && [ -x "$HOST" ]; then
   if "$HOST" install >/dev/null 2>&1; then
     say "Registered the browser helper with the browsers found (install the rdm extension to use it)."
   else
-    say "Could not register the browser helper; use Settings → Browser in rdm."
+    say "Could not register the browser helper; use Settings > Browser in rdm."
   fi
 fi
 
