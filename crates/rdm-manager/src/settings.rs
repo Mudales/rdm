@@ -39,6 +39,29 @@ pub struct Settings {
     pub capture: CaptureSettings,
     /// Look for a new version at startup and once a day.
     pub check_updates: bool,
+    /// Videos on web pages (yt-dlp).
+    pub web_video: WebVideoSettings,
+}
+
+/// How rdm uses yt-dlp for videos on web pages.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct WebVideoSettings {
+    /// When an address is a web page rather than a file, ask yt-dlp for
+    /// the video on it.
+    pub enabled: bool,
+    /// Keep rdm's own copy of yt-dlp up to date (checked weekly); sites
+    /// change often and old versions stop working.
+    pub auto_update: bool,
+}
+
+impl Default for WebVideoSettings {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            auto_update: true,
+        }
+    }
 }
 
 /// Proxy choice. Credentials may be embedded in a custom URL
@@ -167,6 +190,7 @@ impl Settings {
             antivirus: None,
             capture: CaptureSettings::default(),
             check_updates: true,
+            web_video: WebVideoSettings::default(),
         }
     }
 

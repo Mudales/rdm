@@ -384,3 +384,24 @@ async fn http_errors_are_reported() {
     let err = engine().probe(&closed).await.unwrap_err();
     assert!(err.is_retryable(), "{err:?}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn request_size_limit_splits_ranges_into_short_requests() {
+    // Servers like YouTube's throttle long requests; with a limit, every
+    // request asks for at most that many bytes and the file is still exact.
+    let size = 6 * MIB + 12_345;
+    let server = MockServer::start(MockConfig::new(size)).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("chunked.bin");
+    let mut spec = spec(&server, Destination::File(dest.clone()), 3);
+    spec.max_request_size = NonZeroU64::new(512 * 1024);
+    let (_, total, _) = completed(engine().start(spec).unwrap()).await;
+    assert_eq!(total, size);
+    assert_content(&dest, 0, size);
+    let ranges = server.served_ranges();
+    assert!(
+        ranges.iter().all(|(first, last)| last - first < 512 * 1024),
+        "{ranges:?}"
+    );
+    assert!(ranges.len() >= 13, "6 MiB in 512 KiB requests: {ranges:?}");
+}

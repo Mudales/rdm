@@ -21,6 +21,8 @@ const DASH_TYPES = ['application/dash+xml'];
 /** Pieces of a stream, not something to offer on their own. */
 const SEGMENT_EXTENSIONS = ['ts', 'm4s', 'cmfv', 'cmfa', 'aac_seg'];
 const SEGMENT_TYPES = ['video/mp2t', 'video/iso.segment', 'audio/iso.segment'];
+/** Pieces of a video that a site's player assembles itself (YouTube's). */
+const ADAPTIVE_CHUNKS = [/^https:\/\/[^/]+\.googlevideo\.com\/videoplayback/i];
 /** Smaller video/audio responses are previews, sprites or probes. */
 const MIN_MEDIA_BYTES = 64 * 1024;
 
@@ -86,6 +88,9 @@ export function classifyResponse({ url, statusCode, responseHeaders }) {
   if (HLS_TYPES.includes(contentType) || ext === 'm3u8') return result('hls');
   if (DASH_TYPES.includes(contentType) || ext === 'mpd') return result('dash');
   if (SEGMENT_TYPES.includes(contentType) || SEGMENT_EXTENSIONS.includes(ext)) return null;
+  // Adaptive players fetch these in short pieces; the whole video is found
+  // through the page instead (yt-dlp).
+  if (ADAPTIVE_CHUNKS.some((re) => re.test(url))) return null;
   if (size != null && size < MIN_MEDIA_BYTES) return null;
 
   const generic = contentType === '' || contentType === 'application/octet-stream' || contentType === 'binary/octet-stream';

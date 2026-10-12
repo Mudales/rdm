@@ -1,5 +1,37 @@
 # Changelog
 
+## v0.3.0 (2026-10-12)
+
+### Videos on web pages
+- Paste a YouTube, Vimeo or other video page into Add, or use the
+  extension's *Find the video on this page*: yt-dlp reads the page, and rdm
+  offers one choice per resolution (H.264 first, for compatibility) plus
+  *Audio only*. Playlist and channel pages open the batch dialog.
+- rdm downloads what yt-dlp finds with its own engine: several connections
+  in 10 MB requests (YouTube serves short requests at full speed but slows
+  long ones), HLS/DASH segments in parallel, and ffmpeg merging. A 1080p60
+  YouTube video (268 MB) took 5.5 s from page to merged MP4.
+- yt-dlp's own downloader takes over only for formats rdm cannot fetch
+  (RTMP, …) or sites that refuse rdm's requests.
+- Settings → Media downloads yt-dlp and Deno (needed for YouTube) on
+  request, checked against their published SHA-256, and keeps yt-dlp
+  updated weekly. A copy you installed yourself is used as is.
+- DRM-protected and live videos are refused.
+
+### Engine
+- New per-request size limit (`max_request_size`, `rdm get
+  --request-size 10M`): a connection fetches its range as a series of
+  short requests.
+
+### Extension
+- A small × beside the video Download button hides it for that video.
+- YouTube's internal video pieces are no longer listed as videos.
+
+### Fixes
+- A DASH stream stored as a single file could hang after it finished.
+- The install script failed on macOS (`VERSION…: unbound variable`): the
+  system `sh` misreads non-ASCII text in UTF-8 locales.
+
 ## v0.2.0 (2026-10-12)
 
 ### Choosing what rdm takes from the browser

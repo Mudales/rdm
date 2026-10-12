@@ -27,6 +27,11 @@ with no build step.
   option is on in rdm: the file goes to rdm with its cookies and the tab
   goes back (or closes, if it was opened just for the file). The popup
   offers **Download with rdm** for a tab showing a file either way.
+- **Finds videos the page hides.** Many players (YouTube, Vimeo, …) never
+  load a plain video file. *Find the video on this page* (in the popup, the
+  video button's menu and the right-click menu) sends the page to rdm,
+  where yt-dlp reads it and rdm downloads the chosen quality. YouTube's
+  internal video pieces are no longer listed as separate videos.
 - **Downloads all links.** The popup filters a page's links by type (video,
   audio, archives, documents, programs, images), by extra extensions, or to
   the same site only, and adds the selection to rdm's queue.

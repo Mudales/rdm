@@ -29,6 +29,7 @@ let settings = {
   ].map(([name, exts], i) => ({ id: i + 1, name, extensions: exts.split(' ').filter(Boolean), directory: `${home}/${name}` })),
   queues: [{ id: 1, name: 'Main', maxConcurrent: 3, schedule: { enabled: true, start: '01:00', stop: '07:00', days: [1, 2, 3, 4, 5], once: false }, whenDone: 'nothing' }],
   checkUpdates: true,
+  webVideo: { enabled: true, autoUpdate: true },
   capture: null, // filled from the catalog below
 };
 
@@ -51,6 +52,14 @@ catalog.defaults = [
   'pdf', 'epub', 'mobi', 'djvu',
 ];
 settings.capture = { extensions: [...catalog.defaults, 'r0*'], minSize: null, excludedSites: ['update.microsoft.com'], excludedAddresses: [], captureInline: false };
+const webVideo = {
+  ytdlp: { path: null, version: null, managed: false },
+  deno: { path: null, version: null, managed: false },
+  downloads: [
+    { name: 'yt-dlp', repo: 'yt-dlp/yt-dlp', asset: 'yt-dlp_macos.zip', publisher: 'the yt-dlp project (github.com/yt-dlp/yt-dlp)', license: 'Unlicense (public domain)', sizeMb: 54 },
+    { name: 'Deno', repo: 'denoland/deno', asset: 'deno-aarch64-apple-darwin.zip', publisher: 'the Deno project (github.com/denoland/deno)', license: 'MIT', sizeMb: 39 },
+  ],
+};
 let skipped = [
   { extension: 'txt', count: 12, lastSeen: now() - 3600, ignored: false },
   { extension: 'json', count: 3, lastSeen: now() - 86400, ignored: false },
@@ -183,6 +192,31 @@ const commands = {
     return structuredClone(settings);
   },
   probe_url: async ({ request }) => {
+    if (/youtube\.com|youtu\.be|vimeo\.com/.test(request.url)) {
+      await new Promise((r) => setTimeout(r, 900));
+      if (/list=/.test(request.url)) {
+        return {
+          url: request.url, finalUrl: request.url, fileName: 'Talks.mp4', size: null, resumable: true, contentType: 'text/html',
+          categoryId: 1, directory: `${home}/Video`, stream: null, page: true, duplicate: null, serverChecksum: null,
+          site: { title: 'Conference talks 2026', extractor: 'YoutubeTab', pageUrl: request.url, choices: [],
+            entries: ['Opening keynote', 'Async Rust in practice', 'Shipping a download manager', 'Q&A'].map((t, i) => ({ url: `https://www.youtube.com/watch?v=talk${i}`, title: t, duration: 1800 + i * 60 })) },
+        };
+      }
+      return {
+        url: request.url, finalUrl: request.url, fileName: 'Big Buck Bunny 60fps 4K.mp4', size: 1_372_000_000, resumable: true, contentType: 'text/html',
+        categoryId: 1, directory: `${home}/Video`, stream: null, page: true, duplicate: null, serverChecksum: null,
+        site: {
+          title: 'Big Buck Bunny 60fps 4K', extractor: 'Youtube', pageUrl: request.url, duration: 635, entries: [],
+          choices: [
+            { id: '315+140', label: '2160p60 · VP9 · 1.4 GB', height: 2160, audioOnly: false, size: 1_372_000_000 },
+            { id: '299+140', label: '1080p60 · H.264 · 267 MB', height: 1080, audioOnly: false, size: 267_000_000 },
+            { id: '298+140', label: '720p60 · H.264 · 160 MB', height: 720, audioOnly: false, size: 160_000_000 },
+            { id: '18', label: '360p · H.264 · 30 MB', height: 360, audioOnly: false, size: 30_000_000 },
+            { id: '140', label: 'Audio only · M4A · 10 MB', height: null, audioOnly: true, size: 10_000_000 },
+          ],
+        },
+      };
+    }
     await delay(400);
     if (!/^https?:\/\//.test(request.url)) throw `invalid URL \`${request.url}\`: relative URL without a base`;
     if (/\.(m3u8|mpd)(\?|$)/.test(request.url)) {
@@ -297,6 +331,17 @@ const commands = {
     throw 'mock: installing is not simulated';
   },
   open_releases_page: () => {},
+  web_video_status: () => structuredClone(webVideo),
+  install_web_video: async () => {
+    await new Promise((r) => setTimeout(r, 1500));
+    webVideo.ytdlp = { path: `${home}/../Library/Application Support/dev.rdm.desktop/tools/yt-dlp/yt-dlp_macos`, version: '2026.08.19', managed: true };
+    webVideo.deno = { path: `${home}/../Library/Application Support/dev.rdm.desktop/tools/deno/deno`, version: 'deno 2.9.7', managed: true };
+    return structuredClone(webVideo);
+  },
+  update_web_video: async () => {
+    await new Promise((r) => setTimeout(r, 800));
+    return null;
+  },
   export_list: ({ format }) => `${home}/rdm-downloads.${format === 'json' ? 'json' : 'txt'}`,
   import_list: () => ({ added: 3, duplicates: 1, invalid: [] }),
   import_text: ({ text }) => {

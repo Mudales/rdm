@@ -41,6 +41,18 @@ pub enum Error {
     #[error("ffmpeg is required to {0}, but it was not found")]
     FfmpegMissing(&'static str),
 
+    #[error("yt-dlp is needed to find the video on this page; install it from Settings → Media")]
+    YtDlpMissing,
+
+    #[error("no video was found on this page")]
+    NoVideoFound,
+
+    #[error("yt-dlp: {0}")]
+    YtDlp(String),
+
+    #[error("could not install the tool: {0}")]
+    ToolInstall(String),
+
     #[error("ffmpeg failed: {0}")]
     Ffmpeg(String),
 

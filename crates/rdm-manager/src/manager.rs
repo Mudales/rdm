@@ -12,7 +12,7 @@ use rdm_core::{
 };
 use rdm_media::{
     Ffmpeg, FfmpegConfig, FfmpegSource, MediaControl, MediaEngine, MediaEvent, MediaHandle,
-    MediaJob, MediaOutcome, MediaProgress, OutputFormat,
+    MediaJob, MediaOutcome, MediaProgress, OutputFormat, ToolSource, YtDlp,
 };
 use serde::Serialize;
 use tokio::runtime::Handle as Runtime;
@@ -138,6 +138,31 @@ pub struct FfmpegStatus {
     pub hint: String,
 }
 
+/// yt-dlp and Deno: where they are, and whether rdm can download them.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WebVideoStatus {
+    pub ytdlp: ToolState,
+    pub deno: ToolState,
+    /// What "Download" would fetch (after consent); empty when rdm cannot
+    /// download them for this system.
+    pub downloads: Vec<ToolSource>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolState {
+    pub path: Option<PathBuf>,
+    pub version: Option<String>,
+    /// rdm's own copy (rdm updates it); otherwise installed by the user.
+    pub managed: bool,
+}
+
+/// Settings-table key of the last automatic yt-dlp update check.
+const YTDLP_CHECKED_KEY: &str = "ytdlp_checked";
+/// Automatic yt-dlp updates are checked this often.
+const YTDLP_CHECK_EVERY: i64 = 7 * 24 * 60 * 60;
+
 /// What to do once a running download's task ends because we stopped it.
 #[derive(Debug, Clone, Copy)]
 enum AfterStop {
@@ -163,6 +188,18 @@ impl Manager {
         data_dir: &Path,
         engine_config: EngineConfig,
         ffmpeg: FfmpegConfig,
+    ) -> Result<Self> {
+        let ytdlp = YtDlp::new(Some(data_dir.join("tools")));
+        Self::open_with_tools(data_dir, engine_config, ffmpeg, ytdlp).await
+    }
+
+    /// Like [`open_with`](Self::open_with), with an explicit yt-dlp (tests
+    /// pass a fake one, or [`YtDlp::disabled`]).
+    pub async fn open_with_tools(
+        data_dir: &Path,
+        engine_config: EngineConfig,
+        ffmpeg: FfmpegConfig,
+        ytdlp: YtDlp,
     ) -> Result<Self> {
         let runtime = Runtime::try_current().map_err(|_| rdm_core::Error::NoRuntime)?;
         std::fs::create_dir_all(data_dir).map_err(Error::io(data_dir))?;
@@ -210,7 +247,8 @@ impl Manager {
             ..engine_config
         });
         let tools_dir = data_dir.join("tools");
-        let media = MediaEngine::new(engine.clone(), Ffmpeg::new(ffmpeg, Some(tools_dir.clone())));
+        let media = MediaEngine::new(engine.clone(), Ffmpeg::new(ffmpeg, Some(tools_dir.clone())))
+            .with_ytdlp(ytdlp);
         let (events, _) = broadcast::channel(EVENT_CAPACITY);
         let inner = Arc::new(Inner {
             engine,
@@ -405,12 +443,30 @@ impl Manager {
                 new.cookies.as_deref(),
             )?
         };
+        if new.stream.as_ref().is_some_and(|s| s.site) {
+            return self.probe_site(new, request).await;
+        }
         if rdm_media::looks_like_stream(&new.url, None) {
             return self.probe_stream(new, request).await;
         }
-        let info = self.inner.engine.probe(&request).await?;
+        let info = match self.inner.engine.probe(&request).await {
+            Ok(info) => info,
+            // Some sites refuse anything but a browser; yt-dlp knows how
+            // to read them.
+            Err(e) if self.web_video_available() && looks_like_page(&new.url) => {
+                return self.probe_site(new, request).await.map_err(|site_err| {
+                    tracing::debug!("yt-dlp could not read the page either: {site_err}");
+                    e.into()
+                });
+            }
+            Err(e) => return Err(e.into()),
+        };
         if rdm_media::looks_like_stream(info.final_url.as_str(), info.content_type.as_deref()) {
             return self.probe_stream(new, request).await;
+        }
+        let page = is_html(info.content_type.as_deref());
+        if page && self.web_video_available() {
+            return self.probe_site(new, request).await;
         }
         let st = self.inner.state();
         let name = new
@@ -430,8 +486,48 @@ impl Manager {
             category_id,
             directory,
             stream: None,
+            site: None,
+            page,
             duplicate,
             server_checksum: info.digest.map(|d| format!("{}:{}", d.algorithm, d.hex)),
+        })
+    }
+
+    /// Whether web pages are handed to yt-dlp (it is installed and turned on).
+    fn web_video_available(&self) -> bool {
+        self.settings().web_video.enabled && self.inner.media.ytdlp().locate().is_some()
+    }
+
+    /// Reads a web page with yt-dlp: its video's qualities, or a playlist.
+    async fn probe_site(&self, new: &NewDownload, request: Request) -> Result<ProbeResult> {
+        let info = self.inner.media.inspect_site(&request).await?;
+        let mut named = new.clone();
+        named.title = Some(info.title.clone());
+        let format = new.stream.as_ref().map(|c| c.format).unwrap_or_default();
+        let audio_only = new
+            .stream
+            .as_ref()
+            .and_then(|c| c.variant.as_deref())
+            .and_then(|v| info.choices.iter().find(|c| c.id == v))
+            .is_some_and(|c| c.audio_only);
+        let name = site_file_name(&named, format, audio_only);
+        let st = self.inner.state();
+        let duplicate = find_duplicate(&st, &new.url, None, None).cloned();
+        let (file_name, category_id, directory) = placement(&st, new, &name);
+        Ok(ProbeResult {
+            url: request.url.to_string(),
+            final_url: info.page_url.clone(),
+            file_name,
+            size: info.best().and_then(|c| c.size),
+            resumable: true,
+            content_type: Some("text/html".into()),
+            category_id,
+            directory,
+            stream: None,
+            page: true,
+            site: Some(info),
+            duplicate,
+            server_checksum: None,
         })
     }
 
@@ -461,6 +557,8 @@ impl Manager {
             category_id,
             directory,
             stream: Some(manifest),
+            site: None,
+            page: false,
             duplicate,
             server_checksum: None,
         })
@@ -488,6 +586,98 @@ impl Manager {
         Ok(self.ffmpeg_status().await)
     }
 
+    /// yt-dlp's and Deno's locations and versions.
+    pub async fn web_video_status(&self) -> WebVideoStatus {
+        let tools = self.inner.media.ytdlp();
+        let state = |path: Option<PathBuf>| async {
+            let version = match &path {
+                Some(p) => YtDlp::version(p).await.ok(),
+                None => None,
+            };
+            let managed = path.as_deref().is_some_and(|p| tools.is_managed(p));
+            ToolState {
+                path,
+                version,
+                managed,
+            }
+        };
+        let ytdlp = state(tools.locate()).await;
+        let deno = state(tools.locate_deno()).await;
+        let downloads = [rdm_media::ytdlp_source(), rdm_media::deno_source()]
+            .into_iter()
+            .flatten()
+            .collect();
+        WebVideoStatus {
+            ytdlp,
+            deno,
+            downloads,
+        }
+    }
+
+    /// Downloads whichever of yt-dlp and Deno is missing into rdm's tools
+    /// folder. Only call this after the user agreed (the UI shows the
+    /// sources and licenses).
+    pub async fn install_web_video(&self) -> Result<WebVideoStatus> {
+        let tools_dir = &self.inner.tools_dir;
+        if self.inner.media.ytdlp().locate().is_none() {
+            let source = rdm_media::ytdlp_source().ok_or_else(|| {
+                rdm_media::Error::Unsupported("rdm cannot download yt-dlp for this system".into())
+            })?;
+            rdm_media::install_tool(&self.inner.engine, tools_dir, &source, "yt-dlp").await?;
+        }
+        if self.inner.media.ytdlp().locate_deno().is_none()
+            && let Some(deno) = rdm_media::deno_source()
+        {
+            rdm_media::install_tool(&self.inner.engine, tools_dir, &deno, "deno").await?;
+        }
+        self.inner
+            .store
+            .save_value(YTDLP_CHECKED_KEY, &now().to_string())?;
+        Ok(self.web_video_status().await)
+    }
+
+    /// Replaces rdm's own yt-dlp with the newest release when it is older.
+    /// Returns the new version, or `None` when it was already current (or
+    /// yt-dlp is not rdm's own copy, which its installer updates).
+    pub async fn update_web_video(&self) -> Result<Option<String>> {
+        let tools = self.inner.media.ytdlp();
+        let Some(path) = tools.managed_ytdlp() else {
+            return Ok(None);
+        };
+        let installed = YtDlp::version(&path).await.ok();
+        let latest = rdm_media::latest_release(&self.inner.engine, "yt-dlp/yt-dlp").await?;
+        self.inner
+            .store
+            .save_value(YTDLP_CHECKED_KEY, &now().to_string())?;
+        if installed.as_deref() == Some(latest.as_str()) {
+            return Ok(None);
+        }
+        let source = rdm_media::ytdlp_source().ok_or_else(|| {
+            rdm_media::Error::Unsupported("rdm cannot download yt-dlp for this system".into())
+        })?;
+        let tag =
+            rdm_media::install_tool(&self.inner.engine, &self.inner.tools_dir, &source, "yt-dlp")
+                .await?;
+        Ok(Some(tag))
+    }
+
+    /// The weekly automatic update, when it is turned on and due.
+    pub async fn update_web_video_if_due(&self) -> Result<Option<String>> {
+        if !self.settings().web_video.auto_update {
+            return Ok(None);
+        }
+        let last: i64 = self
+            .inner
+            .store
+            .load_value(YTDLP_CHECKED_KEY)?
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        if now() - last < YTDLP_CHECK_EVERY {
+            return Ok(None);
+        }
+        self.update_web_video().await
+    }
+
     /// Adds a download. Without a `file_name` the URL is probed first to get
     /// the server's name for it.
     pub async fn add(&self, mut new: NewDownload) -> Result<DownloadRecord> {
@@ -508,12 +698,27 @@ impl Manager {
         }
         let (name, size) = match (&new.file_name, &new.stream) {
             (Some(name), _) => (rdm_core::sanitize_filename(name), None),
+            // Videos on web pages are named from the title; yt-dlp reads
+            // the page again when the download starts.
+            (None, Some(choice)) if choice.site => {
+                (site_file_name(&new, choice.format, false), None)
+            }
             // Streams are named from the page title; the playlist is read
             // when the download starts.
             (None, Some(choice)) => (stream_file_name(&new, choice.format), None),
             (None, None) => {
                 let p = self.probe(&new).await?;
-                if p.stream.is_some() {
+                if p.site.as_ref().is_some_and(|s| !s.entries.is_empty()) {
+                    return Err(Error::Media(rdm_media::Error::Unsupported(
+                        "this page is a playlist; add its videos instead".into(),
+                    )));
+                }
+                if p.site.is_some() {
+                    new.stream = Some(StreamChoice {
+                        site: true,
+                        ..StreamChoice::default()
+                    });
+                } else if p.stream.is_some() {
                     new.stream = Some(StreamChoice::default());
                 }
                 (p.file_name, p.size)
@@ -853,6 +1058,7 @@ impl Inner {
         let _enter = self.runtime.enter();
         let control = if let Some(choice) = &r.stream {
             let mut job = MediaJob::new(request, r.path());
+            job.site = choice.site;
             job.variant = choice.variant.clone();
             job.audio = choice.audio.clone();
             job.format = choice.format;
@@ -1422,6 +1628,48 @@ fn parts_path(path: &Path) -> PathBuf {
 }
 
 /// A file name for a stream: the page title if known, else the URL.
+/// `text/html` and friends: a web page rather than a file.
+fn is_html(content_type: Option<&str>) -> bool {
+    content_type.is_some_and(|ct| {
+        let ct = ct.to_ascii_lowercase();
+        ct.starts_with("text/html") || ct.starts_with("application/xhtml")
+    })
+}
+
+/// An address without a file extension (or with a page one) is probably a
+/// web page.
+fn looks_like_page(url: &str) -> bool {
+    let ext = rdm_core::Url::parse(url)
+        .ok()
+        .and_then(|u| {
+            let last = u.path_segments()?.next_back()?.to_owned();
+            Some(
+                last.rsplit_once('.')
+                    .map(|(_, e)| e.to_ascii_lowercase())
+                    .unwrap_or_default(),
+            )
+        })
+        .unwrap_or_default();
+    ext.is_empty()
+        || matches!(
+            ext.as_str(),
+            "html" | "htm" | "php" | "asp" | "aspx" | "jsp"
+        )
+}
+
+/// A name for a video on a web page: its title, with the extension of the
+/// chosen output (corrected when the download finishes).
+fn site_file_name(new: &NewDownload, format: OutputFormat, audio_only: bool) -> String {
+    let name = stream_file_name(new, format);
+    if audio_only && format == OutputFormat::Auto {
+        return Path::new(&name)
+            .with_extension("m4a")
+            .to_string_lossy()
+            .into_owned();
+    }
+    name
+}
+
 fn stream_file_name(new: &NewDownload, format: OutputFormat) -> String {
     const GENERIC: [&str; 6] = [
         "master",

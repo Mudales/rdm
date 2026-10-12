@@ -367,6 +367,10 @@ button.chip[aria-pressed=true]:hover { background: var(--accent); color: var(--a
 input.inline-num { width: 80px; padding: 3px 6px; }
 select.inline-select { width: auto; padding: 3px 6px; }
 
+.tools { display: grid; grid-template-columns: max-content 1fr; gap: 3px 12px; }
+.tools .ok { color: var(--done); }
+.tools .missing { color: var(--muted); }
+
 /* Batch dialog */
 .batch-list { display: flex; flex-direction: column; max-height: min(46vh, 380px); overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
 .batch-list label { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 5px 10px; border-bottom: 1px solid var(--border); }

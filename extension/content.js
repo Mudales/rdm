@@ -224,7 +224,7 @@
 
     const nodes = [el('h4', null, 'Download with rdm')];
     if (!items.length) {
-      nodes.push(el('div', 'note', 'No downloadable media found on this page yet. Start playback and try again.'));
+      nodes.push(el('div', 'note', 'Nothing found in what the page loaded. yt-dlp can look for the video:'));
     }
     for (const item of items) {
       const supported = ['video', 'audio', 'hls', 'dash'].includes(item.kind);
@@ -258,6 +258,24 @@
       });
       nodes.push(btn);
     }
+    // yt-dlp reads the page itself (YouTube, Vimeo and many more).
+    const find = el('button', 'item');
+    find.type = 'button';
+    find.append(
+      el('span', 'name', 'Find the video on this page'),
+      el('span', 'meta', 'yt-dlp reads the page and offers its qualities'),
+    );
+    find.addEventListener('click', async () => {
+      find.disabled = true;
+      const reply = await send({
+        type: 'send',
+        items: [{ url: location.href, kind: 'page', title: document.title }],
+        mode: 'ask',
+      });
+      if (reply?.type === 'error') ui.menu.replaceChildren(el('div', 'note error', reply.message));
+      else closeMenu();
+    });
+    nodes.push(find);
     ui.menu.replaceChildren(...nodes);
     place();
   }

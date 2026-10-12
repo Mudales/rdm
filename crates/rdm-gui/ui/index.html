@@ -95,7 +95,7 @@
       <div class="stream-options" id="add-stream" hidden>
         <div class="grid3">
           <label class="field"><span>Quality</span><select id="add-variant"></select></label>
-          <label class="field"><span>Audio</span><select id="add-audio"></select></label>
+          <label class="field" id="add-audio-field"><span>Audio</span><select id="add-audio"></select></label>
           <label class="field"><span>Format</span>
             <select id="add-format">
               <option value="auto">Automatic (MP4)</option>
@@ -106,6 +106,7 @@
             </select>
           </label>
         </div>
+        <p class="hint" id="add-site-note" hidden></p>
       </div>
       <label class="field">
         <span>Save as</span>
@@ -304,6 +305,19 @@
         </div>
         <p class="hint" id="ffmpeg-hint"></p>
         <p class="error" id="ffmpeg-error" role="alert"></p>
+
+        <h3 class="subhead">Videos on web pages (yt-dlp)</h3>
+        <p class="hint">yt-dlp finds the video on pages from YouTube, Vimeo and over a thousand other sites; rdm then downloads it with several connections. YouTube also needs Deno, a JavaScript runtime. DRM-protected videos are never downloaded.</p>
+        <div class="tools" id="yt-status" aria-live="polite">Checking…</div>
+        <div class="row">
+          <button type="button" id="yt-install" hidden>Download yt-dlp</button>
+          <button type="button" id="yt-update" hidden>Update yt-dlp</button>
+          <span class="hint" id="yt-progress" aria-live="polite"></span>
+        </div>
+        <label class="check"><input type="checkbox" id="set-yt-enabled"> When an address is a web page, look for its video with yt-dlp</label>
+        <label class="check"><input type="checkbox" id="set-yt-update"> Keep rdm's yt-dlp up to date (checked weekly)</label>
+        <p class="hint" id="yt-hint"></p>
+        <p class="error" id="yt-error" role="alert"></p>
       </section>
 
       <section class="tab" data-tab="about" hidden>

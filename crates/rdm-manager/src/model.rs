@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use rdm_media::{Manifest, OutputFormat};
+use rdm_media::{Manifest, OutputFormat, SiteInfo};
 
 use crate::settings::Settings;
 
@@ -89,6 +89,9 @@ pub struct DownloadRecord {
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase")]
 pub struct StreamChoice {
+    /// The URL is a web page whose video yt-dlp finds; `variant` is then a
+    /// `SiteChoice` id such as `"299+140"`.
+    pub site: bool,
     /// Variant id from the manifest; best quality if `None`.
     pub variant: Option<String>,
     /// Audio track id; the default track if `None`.
@@ -168,6 +171,12 @@ pub struct ProbeResult {
     pub directory: PathBuf,
     /// For streaming playlists: the renditions to choose from.
     pub stream: Option<Manifest>,
+    /// For web pages: the video's qualities (or a playlist's entries), as
+    /// read by yt-dlp.
+    pub site: Option<SiteInfo>,
+    /// The address is a web page (HTML) and no video was looked for,
+    /// because yt-dlp is not installed or is turned off.
+    pub page: bool,
     /// An existing download of the same URL or file, if any.
     pub duplicate: Option<DownloadRecord>,
     /// A checksum published by the server, verified automatically.

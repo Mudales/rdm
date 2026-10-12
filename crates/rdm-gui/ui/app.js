@@ -689,7 +689,7 @@ function openRemove() {
 // Add dialog
 // ---------------------------------------------------------------------------
 
-const add = { probeToken: 0, dirTouched: false, nameTouched: false, stream: null, title: null };
+const add = { probeToken: 0, dirTouched: false, nameTouched: false, stream: null, site: null, title: null };
 
 function fillSelect(select, items, value) {
   select.replaceChildren(...items.map(([v, label]) => h('option', { value: String(v), text: label })));
@@ -706,6 +706,8 @@ function openAdd(prefill = {}) {
   add.dirTouched = false;
   add.nameTouched = !!prefill.fileName;
   add.title = prefill.title ?? null;
+  // The browser asked rdm to find the video on this page.
+  add.pageHint = prefill.kind === 'page';
   showStreamOptions(null);
   add.probeToken++;
   $('#form-add').reset();
@@ -745,6 +747,9 @@ function showDuplicate(record) {
 /** Shows the quality/audio/format pickers for a stream manifest (or hides them). */
 function showStreamOptions(manifest) {
   add.stream = manifest;
+  add.site = null;
+  $('#add-audio-field').hidden = false;
+  $('#add-site-note').hidden = true;
   $('#add-stream').hidden = !manifest;
   if (!manifest) return;
   fillSelect($('#add-variant'), manifest.variants.map((v) => [v.id, v.label]), manifest.variants[0]?.id ?? '');
@@ -757,12 +762,51 @@ function showStreamOptions(manifest) {
   );
 }
 
-$('#add-format').addEventListener('change', () => {
-  // Keep the file name's extension in step with the format.
-  const ext = { auto: 'mp4', mp4: 'mp4', mkv: 'mkv', m4a: 'm4a', mp3: 'mp3' }[$('#add-format').value];
+/** Shows the qualities yt-dlp found on a web page. */
+function showSiteOptions(site) {
+  showStreamOptions(null);
+  add.site = site;
+  $('#add-stream').hidden = false;
+  $('#add-audio-field').hidden = true;
+  const best = site.choices.find((c) => !c.audioOnly) ?? site.choices[0];
+  fillSelect($('#add-variant'), site.choices.map((c) => [c.id, c.label]), best?.id ?? '');
+  syncSiteChoice();
+}
+
+let ffmpegFound = null;
+/** Keeps the name's extension and the ffmpeg note in step with the choice. */
+async function syncSiteChoice() {
+  if (!add.site) return;
+  const choice = add.site.choices.find((c) => c.id === $('#add-variant').value);
+  syncExtension();
+  const format = $('#add-format').value;
+  const needsMerge = choice && choice.id.includes('+') && !(format === 'm4a' || format === 'mp3');
+  const needsConvert = format === 'mp3' || (format === 'm4a' && !choice?.audioOnly);
+  if (ffmpegFound === null) {
+    try {
+      ffmpegFound = !!(await backend.invoke('ffmpeg_status')).path;
+    } catch {
+      ffmpegFound = true;
+    }
+  }
+  const note = $('#add-site-note');
+  note.hidden = ffmpegFound || !(needsMerge || needsConvert);
+  note.textContent = needsMerge
+    ? 'This site sends video and audio separately; ffmpeg merges them. Get it in Settings → Media (the download can start now and is merged later).'
+    : 'Converting the audio needs ffmpeg (Settings → Media).';
+}
+
+function syncExtension() {
   const name = $('#add-name');
-  if (add.stream && name.value) name.value = name.value.replace(/\.[^.]+$/, '') + `.${ext}`;
-});
+  if (!(add.stream || add.site) || !name.value || add.nameTouched) return;
+  const format = $('#add-format').value;
+  const audioOnly = add.site?.choices.find((c) => c.id === $('#add-variant').value)?.audioOnly;
+  const ext = format === 'auto' && audioOnly ? 'm4a' : { auto: 'mp4', mp4: 'mp4', mkv: 'mkv', m4a: 'm4a', mp3: 'mp3' }[format];
+  name.value = name.value.replace(/\.[^.]+$/, '') + `.${ext}`;
+}
+
+$('#add-format').addEventListener('change', () => (add.site ? syncSiteChoice() : syncExtension()));
+$('#add-variant').addEventListener('change', () => add.site && syncSiteChoice());
 
 function numberOrNull(input, scale = 1) {
   const v = input.value.trim();
@@ -786,14 +830,21 @@ function addRequest(start) {
     title: add.title,
     checksum: text('#add-checksum'),
     allowDuplicate: $('#add-allow-duplicate').checked,
-    stream: add.stream
+    stream: add.site
       ? {
+          site: true,
           variant: $('#add-variant').value || null,
-          audio: $('#add-audio').value || null,
           format: $('#add-format').value,
           label: $('#add-variant').selectedOptions[0]?.textContent ?? null,
         }
-      : null,
+      : add.stream
+        ? {
+            variant: $('#add-variant').value || null,
+            audio: $('#add-audio').value || null,
+            format: $('#add-format').value,
+            label: $('#add-variant').selectedOptions[0]?.textContent ?? null,
+          }
+        : null,
     start,
   };
 }
@@ -808,16 +859,37 @@ async function probe() {
     const request = addRequest('now');
     if (!add.nameTouched) request.fileName = null;
     if (!add.dirTouched) request.directory = null;
+    // A new address is probed afresh (it may be a file, not a page).
+    if (request.stream?.site && !add.pageHint) request.stream = null;
+    if (add.pageHint) request.stream = { site: true, format: 'auto' };
     const p = await backend.invoke('probe_url', { request });
     if (token !== add.probeToken) return;
+    if (p.site?.entries.length) {
+      openPlaylist(p.site, request);
+      return;
+    }
     if (!add.nameTouched) $('#add-name').value = p.fileName;
     if ($('#add-category').value === '' && p.categoryId != null) {
       // Show which category was picked, but keep "automatic" semantics.
       $('#add-category').value = String(p.categoryId);
     }
     if (!add.dirTouched) $('#add-dir').value = p.directory;
-    showStreamOptions(p.stream ?? null);
+    if (p.site) showSiteOptions(p.site);
+    else showStreamOptions(p.stream ?? null);
     showDuplicate(p.duplicate ?? null);
+    if (p.site) {
+      const s = p.site;
+      add.title = s.title;
+      const parts = [s.extractor || 'Web page', s.title];
+      if (s.duration) parts.push(fmtEta(Math.round(s.duration)));
+      parts.push(`${s.choices.length} ${s.choices.length === 1 ? 'choice' : 'choices'}`);
+      setProbeInfo(parts.join(' · '), true);
+      return;
+    }
+    if (p.page) {
+      setProbeInfo('This address is a web page. To find the video on it, get yt-dlp in Settings → Media.');
+      return;
+    }
     if (p.stream) {
       const s = p.stream;
       const parts = [`${s.kind.toUpperCase()} stream`, `${s.variants.length} ${s.variants.length === 1 ? 'quality' : 'qualities'}`];
@@ -839,7 +911,27 @@ async function probe() {
   }
 }
 
-$('#add-url').addEventListener('change', probe);
+/** A playlist or channel page: its videos go to the batch dialog. */
+function openPlaylist(site, request) {
+  $('#dlg-add').close();
+  openBatch(
+    site.entries.map((e) => ({
+      url: e.url,
+      title: e.title,
+      kind: 'page',
+      referer: request.url,
+      pageUrl: request.url,
+      userAgent: request.userAgent,
+      cookies: request.cookies,
+    })),
+    site.title,
+  );
+}
+
+$('#add-url').addEventListener('change', () => {
+  add.pageHint = false;
+  probe();
+});
 $('#add-url').addEventListener('paste', () => setTimeout(probe, 0));
 $('#add-check').addEventListener('click', probe);
 $('#add-name').addEventListener('input', () => (add.nameTouched = true));
@@ -945,9 +1037,12 @@ function extOf(name) {
 
 const batch = { items: [], checked: new Set() };
 
-async function openBatch(items) {
+async function openBatch(items, title = null) {
   await loadCatalog().catch(() => null);
   batch.items = items.map((item, i) => {
+    if (item.kind === 'page') {
+      return { ...item, i, name: item.title || nameFromUrl(item.url), ext: '', group: 'Videos' };
+    }
     const name = item.fileName || nameFromUrl(item.url);
     const ext = extOf(name);
     return { ...item, i, name, ext, group: ext ? typeGroupOf(ext) : 'Other' };
@@ -959,7 +1054,7 @@ async function openBatch(items) {
   } catch {
     /* no page */
   }
-  $('#dlg-batch-title').textContent = `Add ${items.length} links`;
+  $('#dlg-batch-title').textContent = title ? `${title} (${items.length} videos)` : `Add ${items.length} links`;
   $('#batch-source').textContent = source;
   $('#batch-filter').value = '';
   $('#batch-error').textContent = '';
@@ -1474,6 +1569,9 @@ function openSettings(tab = 'general') {
   $('#set-proxy-url').value = draft.proxy.url ?? '';
   $('#set-error').textContent = '';
   $('#set-check-updates').checked = draft.checkUpdates;
+  $('#set-yt-enabled').checked = draft.webVideo?.enabled ?? true;
+  $('#set-yt-update').checked = draft.webVideo?.autoUpdate ?? true;
+  refreshWebVideo();
   $('#cap-search').value = '';
   $('#cap-min').value = draft.capture.minSize ? +(draft.capture.minSize / 1e6).toFixed(2) : 0;
   $('#cap-inline').checked = draft.capture.captureInline;
@@ -1570,6 +1668,80 @@ $('#ffmpeg-install').addEventListener('click', async () => {
     btn.disabled = false;
   }
 });
+// --- yt-dlp ------------------------------------------------------------------
+
+let webVideo = null;
+function renderWebVideo(s) {
+  webVideo = s;
+  const row = (name, t, what) => [
+    h('span', { text: name }),
+    h('span', {
+      class: t.path ? 'ok' : 'missing',
+      text: t.path ? `${t.version ?? 'found'}${t.managed ? ' (rdm\'s copy)' : ` (${t.path})`}` : `Not found: ${what}`,
+    }),
+  ];
+  $('#yt-status').replaceChildren(
+    ...row('yt-dlp', s.ytdlp, 'web pages are not searched for videos'),
+    ...row('Deno', s.deno, 'YouTube offers fewer qualities'),
+  );
+  const missing = !s.ytdlp.path || !s.deno.path;
+  const install = $('#yt-install');
+  install.hidden = !missing || s.downloads.length === 0;
+  const mb = s.downloads
+    .filter((d) => (d.name === 'Deno' ? !s.deno.path : !s.ytdlp.path || !s.ytdlp.managed))
+    .reduce((n, d) => n + d.sizeMb, 0);
+  install.textContent = !s.ytdlp.path ? `Download yt-dlp and Deno (~${mb} MB)` : `Download Deno (~${mb} MB)`;
+  $('#yt-update').hidden = !s.ytdlp.managed;
+  $('#yt-hint').textContent =
+    s.ytdlp.path && !s.ytdlp.managed
+      ? 'This yt-dlp was installed outside rdm; update it the same way (e.g. brew upgrade yt-dlp).'
+      : s.downloads.length
+        ? ''
+        : 'Install yt-dlp and Deno with your package manager (e.g. pipx install yt-dlp, and deno from deno.com).';
+}
+async function refreshWebVideo() {
+  $('#yt-error').textContent = '';
+  try {
+    renderWebVideo(await backend.invoke('web_video_status'));
+  } catch (e) {
+    $('#yt-error').textContent = errorText(e);
+  }
+}
+$('#yt-install').addEventListener('click', async () => {
+  const wanted = webVideo.downloads.filter((d) => (d.name === 'Deno' ? !webVideo.deno.path : !webVideo.ytdlp.path));
+  const list = wanted.map((d) => `• ${d.name} (~${d.sizeMb} MB, ${d.license}) from ${d.publisher}`).join('\n');
+  if (!confirm(`Download these programs into rdm's own folder?\n\n${list}\n\nEach is checked against the SHA-256 its project publishes. They are separate programs under their own licenses.`)) return;
+  const btn = $('#yt-install');
+  btn.disabled = true;
+  $('#yt-progress').textContent = 'Downloading…';
+  $('#yt-error').textContent = '';
+  try {
+    renderWebVideo(await backend.invoke('install_web_video'));
+    toast('yt-dlp is ready: paste a video page address, or use the browser button.');
+  } catch (e) {
+    $('#yt-error').textContent = errorText(e);
+  } finally {
+    btn.disabled = false;
+    $('#yt-progress').textContent = '';
+  }
+});
+$('#yt-update').addEventListener('click', async () => {
+  const btn = $('#yt-update');
+  btn.disabled = true;
+  $('#yt-progress').textContent = 'Checking…';
+  $('#yt-error').textContent = '';
+  try {
+    const version = await backend.invoke('update_web_video');
+    $('#yt-progress').textContent = version ? `Updated to ${version}.` : 'yt-dlp is up to date.';
+    await refreshWebVideo();
+  } catch (e) {
+    $('#yt-progress').textContent = '';
+    $('#yt-error').textContent = errorText(e);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 $('#form-settings').addEventListener('submit', async (e) => {
   e.preventDefault();
   const mode = $('input[name=proxy]:checked')?.value ?? 'system';
@@ -1585,6 +1757,7 @@ $('#form-settings').addEventListener('submit', async (e) => {
     globalSpeedLimit: limit > 0 ? limit * 1024 : null,
     proxy: mode === 'custom' ? { mode, url: $('#set-proxy-url').value.trim() } : { mode },
     checkUpdates: $('#set-check-updates').checked,
+    webVideo: { enabled: $('#set-yt-enabled').checked, autoUpdate: $('#set-yt-update').checked },
     capture: {
       ...draft.capture,
       minSize: Number($('#cap-min').value) > 0 ? Math.round(Number($('#cap-min').value) * 1e6) : null,

@@ -28,6 +28,8 @@ What it does:
 • Optionally takes PDFs, images and videos that would open in a tab.
 • Shows a Download button on videos, and lists the videos and streams
   (HLS/DASH) found on the page. DRM-protected video is never downloaded.
+• Finds the video on pages whose player hides it (YouTube, Vimeo and many
+  more), using the optional yt-dlp program in the rdm app.
 • Right-click menu: download a link, the selected links, all links on a
   page, an image or video, or the file a tab shows; turn rdm on or off for
   a site.

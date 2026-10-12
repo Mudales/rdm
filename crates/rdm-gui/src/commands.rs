@@ -10,7 +10,7 @@ use rdm_ipc::AddItem;
 use rdm_manager::{
     Algorithm, DownloadRecord, ExportFormat, FILE_TYPES, FfmpegStatus, FileTypeGroup, Id,
     ImportReport, LiveProgress, Manager, NewDownload, ProbeResult, QueueState, Settings,
-    SkippedType, StartMode, default_extensions, error_chain,
+    SkippedType, StartMode, WebVideoStatus, default_extensions, error_chain,
 };
 use tauri::{AppHandle, State};
 
@@ -236,6 +236,24 @@ pub fn uninstall_browser_integration(
         installer.uninstall(b).map_err(msg)?;
     }
     Ok(installer.status())
+}
+
+#[tauri::command]
+pub async fn web_video_status(manager: Mgr<'_>) -> CmdResult<WebVideoStatus> {
+    Ok(manager.web_video_status().await)
+}
+
+/// Downloads yt-dlp (and Deno). The UI asks for consent first, showing the
+/// sources, licenses and sizes.
+#[tauri::command]
+pub async fn install_web_video(manager: Mgr<'_>) -> CmdResult<WebVideoStatus> {
+    manager.install_web_video().await.map_err(msg)
+}
+
+/// Updates rdm's own yt-dlp; returns the new version, if any.
+#[tauri::command]
+pub async fn update_web_video(manager: Mgr<'_>) -> CmdResult<Option<String>> {
+    manager.update_web_video().await.map_err(msg)
 }
 
 #[tauri::command]

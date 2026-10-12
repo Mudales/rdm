@@ -95,6 +95,16 @@ async function showMedia() {
   );
 }
 
+// yt-dlp reads the page itself: sites whose player hides the video file.
+if (/^https?:/.test(tab?.url ?? '')) {
+  $('#find-page').hidden = false;
+  $('#find-page').addEventListener('click', async () => {
+    const reply = await send({ type: 'send', items: [{ url: tab.url, kind: 'page', title: tab.title }], mode: 'ask', pageUrl: tab.url });
+    if (reply?.type === 'error') report(reply, '');
+    else window.close();
+  });
+}
+
 // --- Download all links -----------------------------------------------------
 
 let pageLinks = [];

@@ -79,6 +79,11 @@ struct DownloadArgs {
     #[arg(long, default_value = "1M", value_parser = units::parse_size)]
     min_split: u64,
 
+    /// Ask for at most this many bytes per request, e.g. 10M. Some servers
+    /// (YouTube's, for one) slow long requests down but not short ones.
+    #[arg(long, value_parser = units::parse_size)]
+    request_size: Option<u64>,
+
     /// Consecutive failures per connection before giving up.
     #[arg(long, default_value_t = 8)]
     retries: u32,
@@ -219,6 +224,7 @@ async fn download_with(
     let mut spec = DownloadSpec::new(request, destination);
     spec.connections = NonZeroUsize::new(args.connections.into()).unwrap_or(NonZeroUsize::MIN);
     spec.min_split = args.min_split.max(64 * 1024);
+    spec.max_request_size = args.request_size.and_then(NonZeroU64::new);
     spec.speed_limit = args.limit;
     spec.retry = RetryPolicy {
         max_retries: args.retries,

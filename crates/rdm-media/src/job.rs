@@ -22,6 +22,7 @@ use crate::error::{Error, Result};
 use crate::ffmpeg::Ffmpeg;
 use crate::hls::{self, Playlist};
 use crate::model::{Container, Manifest, SegmentRef, StreamKind, Track, Variant};
+use crate::ytdlp::{self, NeedsYtDlp, SiteInfo, SiteTrackSource, YtDlp, YtDlpDownload};
 
 /// Output format for a stream download.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -47,8 +48,12 @@ impl OutputFormat {
 /// A stream download.
 #[derive(Debug, Clone)]
 pub struct MediaJob {
-    /// The playlist / MPD URL with the browser context (cookies, Referer).
+    /// The playlist / MPD URL (or, with `site`, the web page) with the
+    /// browser context (cookies, Referer).
     pub request: Request,
+    /// `request` is a web page whose video yt-dlp finds; `variant` is then a
+    /// [`SiteChoice`](crate::SiteChoice) id.
+    pub site: bool,
     /// Variant id from [`Manifest::variants`]; best quality if `None`.
     pub variant: Option<String>,
     /// Audio track id; the default track if `None`.
@@ -57,7 +62,7 @@ pub struct MediaJob {
     /// cannot be produced (e.g. `.ts` when ffmpeg is missing).
     pub output: PathBuf,
     pub format: OutputFormat,
-    /// Segments fetched at once.
+    /// Segments fetched at once, and connections per whole-file track.
     pub concurrency: usize,
     pub speed_limit: Option<NonZeroU64>,
 }
@@ -66,6 +71,7 @@ impl MediaJob {
     pub fn new(request: Request, output: PathBuf) -> Self {
         Self {
             request,
+            site: false,
             variant: None,
             audio: None,
             output,
@@ -130,20 +136,41 @@ enum Control {
     Cancel,
 }
 
-/// Downloads HLS and DASH streams with the core engine's network stack.
+/// Downloads HLS and DASH streams, and videos on web pages, with the core
+/// engine's network stack.
 #[derive(Debug, Clone)]
 pub struct MediaEngine {
     engine: Engine,
     ffmpeg: Ffmpeg,
+    ytdlp: YtDlp,
 }
 
 impl MediaEngine {
     pub fn new(engine: Engine, ffmpeg: Ffmpeg) -> Self {
-        Self { engine, ffmpeg }
+        Self {
+            engine,
+            ffmpeg,
+            ytdlp: YtDlp::disabled(),
+        }
+    }
+
+    /// Enables videos on web pages, found by this yt-dlp.
+    pub fn with_ytdlp(mut self, ytdlp: YtDlp) -> Self {
+        self.ytdlp = ytdlp;
+        self
     }
 
     pub fn ffmpeg(&self) -> &Ffmpeg {
         &self.ffmpeg
+    }
+
+    pub fn ytdlp(&self) -> &YtDlp {
+        &self.ytdlp
+    }
+
+    /// Reads a web page with yt-dlp (its qualities, or a playlist).
+    pub async fn inspect_site(&self, request: &Request) -> Result<SiteInfo> {
+        self.ytdlp.extract(request).await
     }
 
     /// Fetches and parses a playlist or MPD.
@@ -162,6 +189,7 @@ impl MediaEngine {
         let ctx = Ctx {
             engine: self.engine.clone(),
             ffmpeg: self.ffmpeg.clone(),
+            ytdlp: self.ytdlp.clone(),
             control: control.clone(),
             events: events.clone(),
         };
@@ -235,6 +263,7 @@ impl MediaControl {
 struct Ctx {
     engine: Engine,
     ffmpeg: Ffmpeg,
+    ytdlp: YtDlp,
     control: Arc<watch::Sender<Control>>,
     events: broadcast::Sender<MediaEvent>,
 }
@@ -348,8 +377,29 @@ fn best_variant<'a>(variants: impl Iterator<Item = &'a Variant>) -> Option<&'a V
 /// Tracks to download, named for the parts folder.
 struct Plan {
     tracks: Vec<(&'static str, Track)>,
+    /// Per track: its own request (headers, URL) and request size limit,
+    /// when it differs from the job's (videos found by yt-dlp).
+    requests: Vec<Option<TrackRequest>>,
     variant: String,
     audio: Option<String>,
+}
+
+#[derive(Clone)]
+struct TrackRequest {
+    request: Request,
+    request_size: Option<NonZeroU64>,
+}
+
+impl Plan {
+    fn new(tracks: Vec<(&'static str, Track)>, variant: String, audio: Option<String>) -> Self {
+        let requests = vec![None; tracks.len()];
+        Self {
+            tracks,
+            requests,
+            variant,
+            audio,
+        }
+    }
 }
 
 async fn plan(fetcher: &Fetcher, loaded: Loaded, job: &MediaJob) -> Result<Plan> {
@@ -371,11 +421,9 @@ async fn plan(fetcher: &Fetcher, loaded: Loaded, job: &MediaJob) -> Result<Plan>
     .clone();
 
     match loaded.source {
-        Source::HlsMedia { media } => Ok(Plan {
-            tracks: vec![("video", media.track)],
-            variant: variant.label,
-            audio: None,
-        }),
+        Source::HlsMedia { media } => {
+            Ok(Plan::new(vec![("video", media.track)], variant.label, None))
+        }
         Source::HlsMaster { master } => {
             let url = master
                 .variants
@@ -408,11 +456,7 @@ async fn plan(fetcher: &Fetcher, loaded: Loaded, job: &MediaJob) -> Result<Plan>
                 tracks.push(("audio", media.track));
                 audio_label = Some(a.label);
             }
-            Ok(Plan {
-                tracks,
-                variant: variant.label,
-                audio: audio_label,
-            })
+            Ok(Plan::new(tracks, variant.label, audio_label))
         }
         Source::Dash { mut tracks } => {
             let video_is_audio = m.audio.is_empty();
@@ -436,11 +480,181 @@ async fn plan(fetcher: &Fetcher, loaded: Loaded, job: &MediaJob) -> Result<Plan>
             if let Some(a) = audio {
                 out.push(("audio", tracks.remove(&a.id).ok_or(Error::Empty)?));
             }
-            Ok(Plan {
-                tracks: out,
-                variant: variant.label,
-                audio: audio.map(|a| a.label.clone()),
-            })
+            Ok(Plan::new(
+                out,
+                variant.label,
+                audio.map(|a| a.label.clone()),
+            ))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Videos on web pages (found by yt-dlp)
+// ---------------------------------------------------------------------------
+
+async fn run_site(ctx: &Ctx, fetcher: &Fetcher, job: MediaJob) -> Result<MediaOutcome> {
+    // Media addresses expire (YouTube's after a few hours), so every start,
+    // including a resume, asks yt-dlp again.
+    let info = ctx.ytdlp.extract(&job.request).await?;
+    if !info.entries.is_empty() {
+        return Err(Error::Unsupported(
+            "this page is a playlist; add its videos instead".into(),
+        ));
+    }
+    let label = |id: &str| {
+        info.choices
+            .iter()
+            .find(|c| c.id == id)
+            .map_or_else(|| id.to_owned(), |c| c.label.clone())
+    };
+    let chosen = job
+        .variant
+        .clone()
+        .or_else(|| info.best().map(|c| c.id.clone()))
+        .ok_or(Error::NoVideoFound)?;
+    let site_tracks = match ytdlp::plan_site(&info, Some(&chosen), &job.request)? {
+        Ok(t) => t,
+        Err(NeedsYtDlp(why)) => {
+            tracing::info!("yt-dlp downloads this video itself ({why})");
+            return run_with_ytdlp(ctx, &job, &chosen, label(&chosen)).await;
+        }
+    };
+
+    let mut tracks = Vec::new();
+    let mut requests = Vec::new();
+    for st in site_tracks {
+        // Audio-only output from a video + audio choice: the audio is enough.
+        if job.format.audio_only() && st.name == "video" && chosen.contains('+') {
+            continue;
+        }
+        let track = match st.track {
+            SiteTrackSource::Track(t) => *t,
+            SiteTrackSource::Hls(url) => {
+                let f = ctx.engine.fetcher(&st.request)?;
+                let media = load_media(&f, &url).await?;
+                check_media(&media)?;
+                media.track
+            }
+        };
+        tracks.push((st.name, track));
+        requests.push(Some(TrackRequest {
+            request: st.request,
+            request_size: st.request_size,
+        }));
+    }
+    let plan = Plan {
+        tracks,
+        requests,
+        variant: label(&chosen),
+        audio: None,
+    };
+    let mut native = job.clone();
+    native.variant = Some(chosen.clone());
+    match run_plan(ctx, fetcher, &native, plan).await {
+        // The site refuses rdm's requests (some check how a download is
+        // made): let yt-dlp's own downloader try.
+        Err(Error::Core(rdm_core::Error::HttpStatus { status, .. }))
+            if matches!(status, 403 | 410) =>
+        {
+            ctx.emit(MediaEvent::Warning(format!(
+                "The site refused rdm's connections (HTTP {status}); yt-dlp is downloading it instead."
+            )));
+            let _ = std::fs::remove_dir_all(parts_dir(&job.output));
+            run_with_ytdlp(ctx, &job, &chosen, label(&chosen)).await
+        }
+        other => other,
+    }
+}
+
+/// Lets yt-dlp download the video (formats rdm cannot fetch itself).
+async fn run_with_ytdlp(
+    ctx: &Ctx,
+    job: &MediaJob,
+    choice: &str,
+    label: String,
+) -> Result<MediaOutcome> {
+    ctx.emit(MediaEvent::Started {
+        variant: label,
+        audio: None,
+        segments: 0,
+        resumed: 0,
+    });
+    ctx.emit(MediaEvent::Phase(Phase::Downloading));
+    let stem = job.output.with_extension("");
+    if let Some(dir) = stem.parent() {
+        std::fs::create_dir_all(dir).map_err(Error::io(dir))?;
+    }
+    let run = YtDlpDownload {
+        tools: &ctx.ytdlp,
+        request: &job.request,
+        choice: Some(choice),
+        output_stem: &stem,
+        merge_format: match job.format {
+            OutputFormat::Mkv => Some("mkv"),
+            OutputFormat::Mp4 => Some("mp4"),
+            _ => None,
+        },
+        audio_format: match job.format {
+            OutputFormat::M4a => Some("m4a"),
+            OutputFormat::Mp3 => Some("mp3"),
+            _ => None,
+        },
+        ffmpeg: ctx.ffmpeg.locate(),
+        speed_limit: job.speed_limit,
+        fragments: job.concurrency,
+    };
+    let mut rx = ctx.control.subscribe();
+    let events = ctx.events.clone();
+    let started = Instant::now();
+    let result = run
+        .run(
+            |p| {
+                let speed = p.speed.map_or_else(
+                    || p.downloaded / started.elapsed().as_secs().max(1),
+                    |s| s as u64,
+                );
+                let _ = events.send(MediaEvent::Progress(MediaProgress {
+                    segments_done: 0,
+                    segments_total: 0,
+                    bytes: p.downloaded,
+                    speed,
+                    eta: p.eta.map(Duration::from_secs_f64),
+                }));
+            },
+            async {
+                let _ = rx.wait_for(|c| *c != Control::Run).await;
+            },
+        )
+        .await?;
+    match result {
+        Some(path) => {
+            let size = std::fs::metadata(&path).map_err(Error::io(&path))?.len();
+            Ok(MediaOutcome::Completed { path, size })
+        }
+        None if *ctx.control.borrow() == Control::Cancel => {
+            remove_ytdlp_partials(&stem);
+            Ok(MediaOutcome::Cancelled)
+        }
+        None => Ok(MediaOutcome::Stopped),
+    }
+}
+
+/// Deletes yt-dlp's unfinished files for an output (`<stem>.*.part`, ...).
+fn remove_ytdlp_partials(stem: &Path) {
+    let (Some(dir), Some(name)) = (stem.parent(), stem.file_name().and_then(|n| n.to_str())) else {
+        return;
+    };
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let file = e.file_name();
+        let file = file.to_string_lossy();
+        let partial =
+            file.ends_with(".part") || file.ends_with(".ytdl") || file.contains(".part-Frag");
+        if partial && file.starts_with(name) {
+            let _ = std::fs::remove_file(e.path());
         }
     }
 }
@@ -476,9 +690,21 @@ async fn run(ctx: &Ctx, job: MediaJob) -> Result<MediaOutcome> {
         .engine
         .fetcher(&job.request)?
         .with_speed_limit(job.speed_limit);
+    if job.site {
+        return run_site(ctx, &fetcher, job).await;
+    }
     let loaded = load(&fetcher, &job.request.url).await?;
     let plan = plan(&fetcher, loaded, &job).await?;
+    run_plan(ctx, &fetcher, &job, plan).await
+}
 
+async fn run_plan(
+    ctx: &Ctx,
+    fetcher: &Fetcher,
+    job: &MediaJob,
+    plan: Plan,
+) -> Result<MediaOutcome> {
+    let job = job.clone();
     let parts = parts_dir(&job.output);
     prepare_parts(&parts, &job)?;
     let units = plan.tracks.iter().map(|(_, t)| t.units()).sum::<usize>();
@@ -491,7 +717,7 @@ async fn run(ctx: &Ctx, job: MediaJob) -> Result<MediaOutcome> {
     });
 
     ctx.emit(MediaEvent::Phase(Phase::Downloading));
-    match download_all(ctx, &fetcher, &job, &plan, &parts, units, resumed).await? {
+    match download_all(ctx, fetcher, &job, &plan, &parts, units, resumed).await? {
         Control::Run => {}
         Control::Stop => return Ok(MediaOutcome::Stopped),
         Control::Cancel => {
@@ -586,36 +812,52 @@ async fn download_all(
     let mut tasks: JoinSet<Result<()>> = JoinSet::new();
     let mut whole_controls = Vec::new();
 
-    for (name, track) in &plan.tracks {
+    for ((name, track), own) in plan.tracks.iter().zip(&plan.requests) {
         if let Some(url) = &track.whole {
             let path = whole_path(parts, name);
             if path.exists() && !rdm_core::sidecar_path(&path).exists() {
                 continue;
             }
-            let mut request = job.request.clone();
+            let mut request = own
+                .as_ref()
+                .map_or_else(|| job.request.clone(), |o| o.request.clone());
             request.url = url.clone();
             let mut spec = DownloadSpec::new(request, Destination::File(path));
             spec.overwrite = true;
             spec.speed_limit = job.speed_limit;
+            spec.max_request_size = own.as_ref().and_then(|o| o.request_size);
+            if let Some(n) = std::num::NonZeroUsize::new(job.concurrency) {
+                spec.connections = n;
+            }
             let handle = ctx.engine.start(spec)?;
             whole_controls.push(handle.control());
             let shared = shared.clone();
             tasks.spawn(async move {
                 let mut rx = handle.subscribe();
                 let mut last = 0;
-                let progress = async {
-                    while let Ok(ev) = rx.recv().await {
-                        if let rdm_core::Event::Progress(p) = ev {
-                            shared
-                                .bytes
-                                .fetch_add(p.downloaded.saturating_sub(last), Ordering::Relaxed);
-                            last = p.downloaded;
-                        }
+                let wait = handle.wait();
+                tokio::pin!(wait);
+                // Follow progress until the download ends. The event channel
+                // stays open while its control (kept to stop it) exists, so
+                // its closing cannot be what ends this loop.
+                let outcome = loop {
+                    tokio::select! {
+                        outcome = &mut wait => break outcome,
+                        ev = rx.recv() => match ev {
+                            Ok(rdm_core::Event::Progress(p)) => {
+                                shared
+                                    .bytes
+                                    .fetch_add(p.downloaded.saturating_sub(last), Ordering::Relaxed);
+                                last = p.downloaded;
+                            }
+                            Ok(_) | Err(broadcast::error::RecvError::Lagged(_)) => {}
+                            Err(broadcast::error::RecvError::Closed) => break (&mut wait).await,
+                        },
                     }
                 };
-                let (outcome, ()) = tokio::join!(handle.wait(), progress);
                 match outcome? {
-                    Outcome::Completed { .. } => {
+                    Outcome::Completed { size, .. } => {
+                        shared.bytes.fetch_add(size.saturating_sub(last), Ordering::Relaxed);
                         shared.done.fetch_add(1, Ordering::Relaxed);
                         Ok(())
                     }
@@ -632,12 +874,19 @@ async fn download_all(
                 .enumerate()
                 .map(|(i, s)| (Some(i), s)),
         );
+        let track_fetcher = match own {
+            Some(o) => ctx
+                .engine
+                .fetcher(&o.request)?
+                .with_speed_limit(job.speed_limit),
+            None => fetcher.clone(),
+        };
         for (index, seg) in units {
             let path = unit_path(parts, name, index);
             if path.exists() {
                 continue;
             }
-            let (fetcher, shared, limit) = (fetcher.clone(), shared.clone(), limit.clone());
+            let (fetcher, shared, limit) = (track_fetcher.clone(), shared.clone(), limit.clone());
             tasks.spawn(async move {
                 let _permit = limit
                     .acquire_owned()

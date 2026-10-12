@@ -662,6 +662,9 @@ async fn run_segmented(t: &Arc<Transfer>) -> Result<bool> {
 enum SegmentEnd {
     Done,
     Stopped,
+    /// The request ended at the request size limit; more of the segment
+    /// is left.
+    More,
 }
 
 /// Takes segments until there is nothing left to take. `Ok(true)` if it
@@ -679,7 +682,7 @@ async fn worker(t: Arc<Transfer>) -> Result<bool> {
         let result = download_segment(&t, id, &mut rx, &mut buf).await;
         t.map().release(id);
         match result? {
-            SegmentEnd::Done => {}
+            SegmentEnd::Done | SegmentEnd::More => {}
             SegmentEnd::Stopped => return Ok(true),
         }
     }
@@ -697,6 +700,10 @@ async fn download_segment(
     loop {
         let before = t.map().bounds(id).map_or(0, |(cursor, _)| cursor);
         let err = match fetch_range(t, id, rx, buf).await {
+            Ok(SegmentEnd::More) => {
+                failures = 0;
+                continue;
+            }
             Ok(end) => return Ok(end),
             Err(e) => e,
         };
@@ -737,7 +744,8 @@ async fn download_segment(
     }
 }
 
-/// One HTTP request for the rest of a segment.
+/// One HTTP request for the rest of a segment (or the next part of it, with
+/// a request size limit).
 async fn fetch_range(
     t: &Transfer,
     id: SegmentId,
@@ -755,11 +763,15 @@ async fn fetch_range(
     if start >= end {
         return Ok(SegmentEnd::Done);
     }
+    let request_end = match t.ctx.spec.max_request_size {
+        Some(max) => end.min(start.saturating_add(max.get())),
+        None => end,
+    };
 
     let mut req = t
         .client
         .get()
-        .header(header::RANGE, format!("bytes={start}-{}", end - 1));
+        .header(header::RANGE, format!("bytes={start}-{}", request_end - 1));
     if let Some(v) = t.info.if_range() {
         req = req.header(header::IF_RANGE, v);
     }
@@ -782,10 +794,15 @@ async fn fetch_range(
             Ok(Some(b)) => b,
             Ok(None) => {
                 break match t.map().bounds(id) {
-                    Some((cursor, seg_end)) if cursor < seg_end => Err(Error::Truncated {
-                        received: cursor - start,
-                        expected: end - start,
-                    }),
+                    // The segment may have shrunk (work stealing) below the
+                    // requested end; only bytes short of both are missing.
+                    Some((cursor, seg_end)) if cursor < seg_end.min(request_end) => {
+                        Err(Error::Truncated {
+                            received: cursor - start,
+                            expected: request_end - start,
+                        })
+                    }
+                    Some((cursor, seg_end)) if cursor < seg_end => Ok(SegmentEnd::More),
                     _ => Ok(SegmentEnd::Done),
                 };
             }

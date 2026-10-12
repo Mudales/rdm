@@ -99,6 +99,7 @@ fn run() -> anyhow::Result<()> {
                 Err(e) => tracing::warn!("browser integration unavailable: {e}"),
             }
             clipboard::spawn(app.handle().clone(), manager.clone());
+            spawn_web_video_updates(manager.clone());
             app.manage(manager);
             tray::create(app.handle())?;
             update::spawn_daily_check(app.handle().clone());
@@ -147,6 +148,9 @@ fn run() -> anyhow::Result<()> {
             commands::skipped_types,
             commands::ignore_skipped,
             commands::add_batch,
+            commands::web_video_status,
+            commands::install_web_video,
+            commands::update_web_video,
             update::app_info,
             update::check_update,
             update::install_update,
@@ -167,6 +171,22 @@ fn run() -> anyhow::Result<()> {
         _ => {}
     });
     Ok(())
+}
+
+/// Keeps rdm's own yt-dlp current (weekly, when enabled): sites change
+/// often and old versions stop finding their videos.
+fn spawn_web_video_updates(manager: Arc<Manager>) {
+    tauri::async_runtime::spawn(async move {
+        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
+        loop {
+            match manager.update_web_video_if_due().await {
+                Ok(Some(version)) => manager.notice(format!("yt-dlp was updated to {version}.")),
+                Ok(None) => {}
+                Err(e) => tracing::info!("yt-dlp update check failed: {e}"),
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(6 * 60 * 60)).await;
+        }
+    });
 }
 
 /// Relays manager events to the web UI.

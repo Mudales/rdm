@@ -142,6 +142,13 @@ export const cases = [
     t.equal(capturesSite({ ...DEFAULT_RULES, excludedSites: ['x.org'] }, 'notx.org'), true);
   }],
 
+  ["YouTube's player chunks are not offered as videos", (t) => {
+    const chunk = resp('https://rr2---sn-nhpax.googlevideo.com/videoplayback?itag=299&range=0-1048575', { 'Content-Type': 'video/mp4', 'Content-Length': '1048576' });
+    t.equal(classifyResponse(chunk), null);
+    const other = resp('https://cdn.example.com/videoplayback/clip.mp4', { 'Content-Type': 'video/mp4', 'Content-Length': '1048576' });
+    t.equal(classifyResponse(other)?.kind, 'video');
+  }],
+
   ['streams are downloadable', (t) => {
     t.equal(isSupportedKind('hls'), true);
     t.equal(isSupportedKind('dash'), true);

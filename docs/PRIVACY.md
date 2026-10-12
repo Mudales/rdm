@@ -45,6 +45,16 @@ and downloads ffmpeg from its publisher only when you ask it to. These
 requests carry no information about you beyond what any HTTP request does,
 such as your IP address and a User-Agent naming the program.
 
+## Videos on web pages (yt-dlp)
+
+When you ask rdm to find the video on a web page, the optional yt-dlp
+program (and Deno, for YouTube) contacts that site the way your browser
+would, with your cookies for it, to read the page and download the video.
+Cookies reach yt-dlp through a private temporary file that is deleted after
+each run. If you let rdm download yt-dlp and Deno, they come from their
+projects' GitHub releases, and rdm checks GitHub once a week for a newer
+yt-dlp (unless you turn that off in Settings → Media).
+
 ## Changes and contact
 
 Changes to this policy are made in this file, and its history is public on

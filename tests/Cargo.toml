@@ -12,16 +12,22 @@ publish = false
 name = "mock-server"
 path = "src/bin/mock-server.rs"
 
+[[bin]]
+name = "fake-ytdlp"
+path = "src/bin/fake-ytdlp.rs"
+
 [dependencies]
 anyhow.workspace = true
 axum.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
 
 [dev-dependencies]
 rdm-core.workspace = true
-serde_json.workspace = true
+rdm-manager.workspace = true
+rdm-media.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "test-util"] }
 

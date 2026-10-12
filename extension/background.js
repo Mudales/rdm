@@ -339,6 +339,7 @@ function setupMenus() {
   add({ id: 'rdm-media', parentId: 'rdm', title: 'Download this media…', contexts: ['video', 'audio'] });
   add({ id: 'rdm-image', parentId: 'rdm', title: 'Download image…', contexts: ['image'] });
   add({ id: 'rdm-page-file', parentId: 'rdm', title: 'Download this file…', contexts: ['page'], visible: false });
+  add({ id: 'rdm-page-video', parentId: 'rdm', title: 'Find the video on this page (yt-dlp)…', contexts: ['page', 'frame', 'video', 'audio'] });
   add({ id: 'rdm-all-links', parentId: 'rdm', title: 'Download all links on this page…' });
   add({ id: 'rdm-streams', parentId: 'rdm', title: 'Detected media', visible: false });
   add({ id: 'rdm-sep', parentId: 'rdm', type: 'separator' });
@@ -425,11 +426,15 @@ async function onMenu(info, tab) {
       if (/^https?:/i.test(info.srcUrl ?? '')) {
         return sendToApp([{ url: info.srcUrl, kind: info.mediaType === 'audio' ? 'audio' : 'video', title: tab?.title }], 'ask', pageUrl);
       }
-      // A blob: player plays a stream; use the one detected on this tab.
+      // A blob: player plays a stream; use the one detected on this tab,
+      // or let yt-dlp read the page.
       const best = (await mediaFor(tabId)).find((i) => isSupportedKind(i.kind));
       if (best) return sendToApp([mediaItem(best, tab)], 'ask', tab?.url);
-      return { type: 'error', message: 'No downloadable stream detected yet. Play the video for a moment and try again.' };
+      return sendToApp([{ url: tab?.url, kind: 'page', title: tab?.title }], 'ask', tab?.url);
     }
+    case 'rdm-page-video':
+      if (!/^https?:/i.test(info.pageUrl ?? tab?.url ?? '')) return undefined;
+      return sendToApp([{ url: info.pageUrl ?? tab.url, kind: 'page', title: tab?.title }], 'ask', info.pageUrl ?? tab.url);
     case 'rdm-page-file': {
       const file = tabFiles.get(tabId);
       return file && sendToApp([{ url: file.url, fileName: file.fileName ?? undefined, referer: file.referer }], 'ask', file.referer);

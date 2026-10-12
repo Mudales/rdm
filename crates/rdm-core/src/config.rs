@@ -200,6 +200,11 @@ pub struct DownloadSpec {
     /// With [`Destination::File`], replace an existing file that is not an
     /// rdm partial download instead of failing.
     pub overwrite: bool,
+    /// Ask for at most this many bytes per HTTP request; a connection then
+    /// fetches its range as a series of requests. Some servers (YouTube's
+    /// among them) slow long requests to playback speed but serve short
+    /// ones at full speed.
+    pub max_request_size: Option<NonZeroU64>,
 }
 
 impl DownloadSpec {
@@ -213,6 +218,7 @@ impl DownloadSpec {
             speed_limit: None,
             retry: RetryPolicy::default(),
             overwrite: false,
+            max_request_size: None,
         }
     }
 

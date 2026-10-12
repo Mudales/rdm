@@ -4,12 +4,13 @@ A cross-platform (macOS, Windows, Linux) download manager written in Rust,
 inspired by Internet Download Manager and
 [ab-download-manager](https://github.com/amir1376/ab-download-manager).
 
-> **Status:** v0.2.0. The download engine (`rdm-core`), the headless `rdm`
+> **Status:** v0.3.0. The download engine (`rdm-core`), the headless `rdm`
 > CLI, the desktop app (`rdm-gui`, backed by `rdm-manager`), browser
 > integration (extension, `rdm-host`, `rdm-ipc`), streaming media
 > (`rdm-media`: HLS/DASH), IDM-style extras (scheduler, import/export,
 > checksums, antivirus hook, duplicate detection, drag-and-drop), file-type
-> capture rules, a right-click menu, install scripts and in-app updates.
+> capture rules, a right-click menu, install scripts, in-app updates, and
+> videos on web pages through yt-dlp.
 > See [Roadmap](#roadmap).
 
 ## Install
@@ -223,6 +224,41 @@ output format (MP4, MKV, M4A, MP3).
   - Linux: use your package manager. The only zip-with-checksum Linux builds
     are compiled `--enable-nonfree`, so rdm doesn't offer them.
 
+## Videos on web pages (yt-dlp)
+
+Many sites (YouTube, Vimeo and over a thousand more) never hand the browser
+a plain video file. rdm uses [yt-dlp](https://github.com/yt-dlp/yt-dlp) to
+read such pages, then downloads the video with **its own engine**:
+
+- **Finding:** paste a page address into Add (or use the extension's *Find
+  the video on this page*). yt-dlp reads it in a second or two, and rdm
+  offers one choice per resolution (the most compatible format at each,
+  H.264 first), plus *Audio only*. A playlist or channel page opens the
+  batch dialog with its videos.
+- **Downloading:** plain files use several connections, each fetching
+  **10 MB requests**. YouTube slows a long request to playback speed
+  (about 0.5 MB/s) but serves short ones at full speed, which is how rdm
+  stays fast there. HLS and DASH segments download in parallel, and
+  separate video and audio are merged by ffmpeg.
+- **Speed:** on a ~95 MB/s line, a 150 MB YouTube file took 40 s with
+  plain multi-connection ranges, 3.6 s with yt-dlp's own downloader, and
+  1.6 s with rdm's chunked connections.
+- **Fallback:** formats rdm cannot fetch itself (RTMP, Smooth Streaming, …),
+  or sites that refuse rdm's requests (HTTP 403), are downloaded by yt-dlp's
+  own downloader, with progress shown the same way.
+- **Resume:** video addresses expire (YouTube's after a few hours), so every
+  start, including a resume, asks yt-dlp again; finished pieces are kept.
+- **Getting yt-dlp:** Settings → Media can download yt-dlp and **Deno** (the
+  JavaScript runtime yt-dlp needs for YouTube) from their GitHub releases,
+  each checked against its published SHA-256. rdm keeps its copy of yt-dlp
+  updated weekly, since sites change often. A yt-dlp or Deno you installed
+  yourself (Homebrew, pipx, ...) is used as is.
+- **Limits:** DRM-protected videos are refused (rdm never passes yt-dlp's
+  `--allow-unplayable-formats`), as are live streams. Your cookies reach
+  yt-dlp through a private temporary file that is deleted after each run.
+  Whether downloading is allowed is up to each site's terms; that choice is
+  yours.
+
 ## Using the CLI
 
 ```bash
@@ -375,6 +411,7 @@ python3 -m http.server 5174 --directory crates/rdm-gui/ui
 | 6 | Scheduler, import/export, checksums, AV hook, duplicates, drag-and-drop | ✅ |
 | 7 | Packaging, signing docs, v0.1.0 release | ✅ |
 | 8 | Capture rules, right-click menu, install scripts, in-app updates (v0.2.0) | ✅ |
+| 9 | Videos on web pages with yt-dlp, downloaded by rdm's engine (v0.3.0) | ✅ |
 
 ## License
 

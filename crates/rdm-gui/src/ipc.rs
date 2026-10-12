@@ -129,7 +129,15 @@ pub(crate) async fn add_all(
 }
 
 fn to_new_download(item: AddItem, start: StartMode) -> NewDownload {
-    let stream = matches!(item.kind.as_deref(), Some("hls" | "dash")).then(StreamChoice::default);
+    let stream = match item.kind.as_deref() {
+        Some("hls" | "dash") => Some(StreamChoice::default()),
+        // A web page whose video yt-dlp finds.
+        Some("page") => Some(StreamChoice {
+            site: true,
+            ..StreamChoice::default()
+        }),
+        _ => None,
+    };
     NewDownload {
         stream,
         title: item.title,

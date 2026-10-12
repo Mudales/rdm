@@ -19,6 +19,8 @@ mod ffmpeg;
 mod hls;
 mod job;
 mod model;
+mod tools;
+mod ytdlp;
 
 pub use error::{Error, Result};
 pub use ffmpeg::{
@@ -29,6 +31,8 @@ pub use job::{
     OutputFormat, Phase,
 };
 pub use model::{AudioTrack, Manifest, StreamKind, Variant};
+pub use tools::{ToolSource, deno_source, install_tool, latest_release, ytdlp_source};
+pub use ytdlp::{DENO_ENV, PlaylistEntry, SiteChoice, SiteInfo, YTDLP_ENV, YtDlp};
 
 /// Whether a URL or content type looks like a streaming playlist.
 pub fn looks_like_stream(url: &str, content_type: Option<&str>) -> bool {
