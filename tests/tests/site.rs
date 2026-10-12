@@ -337,3 +337,46 @@ async fn the_manager_reads_web_pages_with_ytdlp() {
     );
     manager.shutdown().await;
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_web_page_is_never_saved_as_the_download() {
+    use rdm_manager::{Manager, NewDownload, ProxySetting, Settings};
+
+    let server = MockServer::start(MockConfig::new(1000).with_file(
+        "/watch",
+        "<html>video page</html>",
+        "text/html",
+    ))
+    .await
+    .unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let manager = Manager::open_with_tools(
+        &dir.path().join("data"),
+        rdm_core::EngineConfig::default(),
+        rdm_media::FfmpegConfig::Disabled,
+        YtDlp::disabled(),
+    )
+    .await
+    .unwrap();
+    let mut settings = Settings::with_directory(&dir.path().join("dl"));
+    settings.proxy = ProxySetting::Direct;
+    manager.update_settings(settings).unwrap();
+    let err = manager
+        .add(NewDownload {
+            url: format!("http://{}/watch", server.addr()),
+            ..NewDownload::default()
+        })
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("yt-dlp"), "{err}");
+    assert!(manager.list().is_empty());
+    // Real files from the same server still work.
+    manager
+        .add(NewDownload {
+            url: server.url(),
+            ..NewDownload::default()
+        })
+        .await
+        .unwrap();
+    manager.shutdown().await;
+}

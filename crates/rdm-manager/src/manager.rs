@@ -713,6 +713,11 @@ impl Manager {
                         "this page is a playlist; add its videos instead".into(),
                     )));
                 }
+                // A web page is not the download: without yt-dlp there is
+                // nothing to save but the page's HTML.
+                if p.page && p.site.is_none() {
+                    return Err(Error::Media(rdm_media::Error::YtDlpMissing));
+                }
                 if p.site.is_some() {
                     new.stream = Some(StreamChoice {
                         site: true,

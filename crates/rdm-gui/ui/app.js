@@ -706,6 +706,7 @@ function openAdd(prefill = {}) {
   add.dirTouched = false;
   add.nameTouched = !!prefill.fileName;
   add.title = prefill.title ?? null;
+  setAddButtons(true);
   // The browser asked rdm to find the video on this page.
   add.pageHint = prefill.kind === 'page';
   showStreamOptions(null);
@@ -849,10 +850,15 @@ function addRequest(start) {
   };
 }
 
+function setAddButtons(enabled) {
+  for (const b of $$('#dlg-add .actions button:not(#add-cancel)')) b.disabled = !enabled;
+}
+
 async function probe() {
   const url = $('#add-url').value.trim();
   if (!url) return;
   const token = ++add.probeToken;
+  setAddButtons(true);
   setProbeInfo('Checking…');
   $('#add-error').textContent = '';
   try {
@@ -887,7 +893,9 @@ async function probe() {
       return;
     }
     if (p.page) {
-      setProbeInfo('This address is a web page. To find the video on it, get yt-dlp in Settings → Media.');
+      // Saving the page's HTML is never what was meant.
+      setProbeInfo('This address is a web page, not a file. To find the video on it, get yt-dlp in Settings → Media (and turn on “look for its video”).');
+      setAddButtons(false);
       return;
     }
     if (p.stream) {
