@@ -3602,7 +3602,7 @@ checksum = "20675572f6f24e9e76ef639bc5552774ed45f1c30e2951e1e99c59888861c539"
 
 [[package]]
 name = "rdm-cli"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -3617,7 +3617,7 @@ dependencies = [
 
 [[package]]
 name = "rdm-core"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "fastrand",
  "httpdate",
@@ -3632,7 +3632,7 @@ dependencies = [
 
 [[package]]
 name = "rdm-gui"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "rdm-core",
@@ -3655,7 +3655,7 @@ dependencies = [
 
 [[package]]
 name = "rdm-host"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "dirs",
@@ -3672,7 +3672,7 @@ dependencies = [
 
 [[package]]
 name = "rdm-ipc"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "dirs",
  "interprocess",
@@ -3686,7 +3686,7 @@ dependencies = [
 
 [[package]]
 name = "rdm-manager"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "dirs",
  "jiff",
@@ -3707,7 +3707,7 @@ dependencies = [
 
 [[package]]
 name = "rdm-media"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "aes",
  "cbc",
@@ -3727,7 +3727,7 @@ dependencies = [
 
 [[package]]
 name = "rdm-tests"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "anyhow",
  "axum",

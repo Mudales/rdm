@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.3.1 (2026-10-12)
+
+### Fixes
+- Adding a web page address without yt-dlp (or with web pages turned off)
+  saved the page's HTML under the page's name. rdm now refuses it and
+  points to Settings → Media; the Add dialog disables its add buttons
+  with the same advice.
+
 ## v0.3.0 (2026-10-12)
 
 ### Videos on web pages
