@@ -57,7 +57,10 @@ impl HttpClient {
         );
 
         // The jar both carries browser-supplied cookies and keeps any cookies
-        // set along redirect chains.
+        // set along redirect chains. A bare `name=value` would default to the
+        // URL's directory as its path, so a redirect elsewhere on the same
+        // host (common for attachments) would lose the session: scope them
+        // to the whole host, as a `Cookie` header from the browser implies.
         let jar = Arc::new(Jar::default());
         for cookies in cookie_strings {
             for pair in cookies
@@ -65,7 +68,7 @@ impl HttpClient {
                 .map(str::trim)
                 .filter(|p| p.contains('='))
             {
-                jar.add_cookie_str(pair, &request.url);
+                jar.add_cookie_str(&format!("{pair}; Path=/"), &request.url);
             }
         }
 

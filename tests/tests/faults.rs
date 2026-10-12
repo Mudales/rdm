@@ -558,3 +558,20 @@ async fn events_report_retry_reasons() {
     });
     assert_eq!(reason.as_deref(), Some("server returned HTTP 503"));
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn browser_cookies_follow_redirects_to_other_paths() {
+    // Browsers hand over `name=value` pairs without their `Path`; they must
+    // still reach a redirect target outside the original URL's directory.
+    let server = server(|c| c.faults.require_cookie = Some("auth=xyz".into())).await;
+    let dir = tempfile::tempdir().unwrap();
+    let with_cookies = request(&server.redirect_url(2)).cookies("auth=xyz");
+    let dest = dir.path().join("r");
+    completed(
+        engine()
+            .start(spec_for(with_cookies, Destination::File(dest.clone()), 4))
+            .unwrap(),
+    )
+    .await;
+    assert_content(&dest, 0, 4 * MIB);
+}
