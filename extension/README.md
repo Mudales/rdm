@@ -1,6 +1,6 @@
 # rdm browser extension
 
-A Manifest V3 extension for Chrome, Edge, Brave, Chromium and Firefox (128+).
+A Manifest V3 extension for Chrome, Edge, Brave, Chromium and Firefox (140+).
 It sends downloads, videos and links to the rdm app. It's plain JavaScript
 with no build step.
 
