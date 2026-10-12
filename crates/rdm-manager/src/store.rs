@@ -119,6 +119,25 @@ impl Store {
         Ok(())
     }
 
+    /// A JSON document stored next to the settings under `key`.
+    pub fn load_value(&self, key: &str) -> Result<Option<String>> {
+        Ok(self
+            .conn()
+            .query_row("SELECT value FROM settings WHERE key = ?1", [key], |r| {
+                r.get(0)
+            })
+            .optional()?)
+    }
+
+    pub fn save_value(&self, key: &str, json: &str) -> Result<()> {
+        self.conn().execute(
+            "INSERT INTO settings (key, value) VALUES (?1, ?2)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            [key, json],
+        )?;
+        Ok(())
+    }
+
     pub fn load_downloads(&self) -> Result<Vec<DownloadRecord>> {
         let conn = self.conn();
         let mut stmt = conn.prepare(&format!(

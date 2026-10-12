@@ -4,29 +4,47 @@ A cross-platform (macOS, Windows, Linux) download manager written in Rust,
 inspired by Internet Download Manager and
 [ab-download-manager](https://github.com/amir1376/ab-download-manager).
 
-> **Status:** v0.1.0. Phases 1–7 done: the download engine (`rdm-core`), the
-> headless `rdm` CLI, the desktop app (`rdm-gui`, backed by `rdm-manager`),
-> browser integration (extension, `rdm-host`, `rdm-ipc`), streaming media
-> (`rdm-media`: HLS/DASH) and IDM-style extras (scheduler, import/export,
-> checksums, antivirus hook, duplicate detection, drag-and-drop), packaged
-> for macOS, Windows and Linux.
+> **Status:** v0.2.0. The download engine (`rdm-core`), the headless `rdm`
+> CLI, the desktop app (`rdm-gui`, backed by `rdm-manager`), browser
+> integration (extension, `rdm-host`, `rdm-ipc`), streaming media
+> (`rdm-media`: HLS/DASH), IDM-style extras (scheduler, import/export,
+> checksums, antivirus hook, duplicate detection, drag-and-drop), file-type
+> capture rules, a right-click menu, install scripts and in-app updates.
 > See [Roadmap](#roadmap).
 
 ## Install
 
-Download the installer for your system from the
-[Releases](https://github.com/Mudales/rdm/releases) page:
+**macOS and Linux:**
 
-- macOS: `.dmg` (one universal build for Apple Silicon and Intel)
-- Windows: `.msi` or `-setup.exe`
-- Linux: `.AppImage` or `.deb`
-- browser extension: `rdm-extension-*.zip`
+```bash
+curl -fsSL https://raw.githubusercontent.com/Mudales/rdm/main/scripts/install.sh | sh
+```
 
-Release builds are currently **unsigned**.
+**Windows** (PowerShell, no administrator rights needed):
+
+```powershell
+irm https://raw.githubusercontent.com/Mudales/rdm/main/scripts/install.ps1 | iex
+```
+
+The scripts download the latest release, check it against the release's
+`SHA256SUMS`, install it (macOS: `/Applications/rdm.app`; Linux: the `.deb`
+through apt, or the AppImage in `~/.local/bin` with `--appimage`; Windows:
+a per-user install) and register the browser helper. `--uninstall`
+(`-Uninstall` on Windows) removes rdm and keeps your downloads and
+settings; `--help` lists the other options.
+
+Or download an installer from the
+[Releases](https://github.com/Mudales/rdm/releases) page: a universal
+`.dmg` for macOS, `.msi` or `-setup.exe` for Windows, `.AppImage` or `.deb`
+for Linux, and `rdm-extension-*.zip` for the browser.
+
+Release builds are not code-signed by Apple or Microsoft.
 [docs/RELEASING.md](docs/RELEASING.md#installing-unsigned-builds) explains
-how to open them, and how to check the files against `SHA256SUMS`. After
-installing, open Settings → Browser → **Register**, then load the extension
-([extension/README.md](extension/README.md)).
+how to open them. Updates are signed: rdm checks for new versions (Settings
+→ About) and installs one only if its signature matches the key built into
+the app. Then load the extension
+([extension/README.md](extension/README.md)); the scripts already
+registered it with your browsers.
 
 ## Architecture
 
@@ -133,7 +151,21 @@ cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
   the browsers on this machine. Requests from the extension open the Add
   dialog prefilled (single item) or go into the queue (download all links).
   See [extension/README.md](extension/README.md).
-- **Clipboard monitoring:** copying an http(s) link to a known file type
+- **Capture (Settings → Capture):** which browser downloads rdm takes over.
+  File types are grouped (Video, Audio, Archives, Programs, Disk images,
+  Documents, Images, Other) and toggled with one click, per group or per
+  type; search finds a type or adds any other extension (`*` works, e.g.
+  `r0*`). Types the browser downloaded without rdm are listed with a count
+  and an **Add** button. Also: a minimum size, sites and address patterns
+  to leave alone, and an option to take PDFs, images and videos that would
+  open in a tab.
+- **Several links at once** (from the browser's "download all links" or a
+  selection): a list with checkboxes, a filter, and per-type selection
+  chips; add them to a queue or start them.
+- **Updates (Settings → About):** check now, or automatically at startup and
+  once a day. Installing stops and saves running downloads, verifies the
+  update's signature and restarts rdm.
+- **Clipboard monitoring:** copying an http(s) link to a selected file type
   offers to download it, so rdm still works without the extension. It can
   be turned off in Settings.
 
@@ -342,6 +374,7 @@ python3 -m http.server 5174 --directory crates/rdm-gui/ui
 | 5 | HLS/DASH + ffmpeg muxing | ✅ |
 | 6 | Scheduler, import/export, checksums, AV hook, duplicates, drag-and-drop | ✅ |
 | 7 | Packaging, signing docs, v0.1.0 release | ✅ |
+| 8 | Capture rules, right-click menu, install scripts, in-app updates (v0.2.0) | ✅ |
 
 ## License
 

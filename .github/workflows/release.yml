@@ -1,8 +1,10 @@
 name: Release
 
 # Push a tag like v0.1.0 to build installers for macOS (universal), Windows
-# and Linux and attach them to a draft GitHub Release. Builds are unsigned
-# unless the signing secrets described in docs/RELEASING.md are set.
+# and Linux and attach them to a draft GitHub Release, with the signed
+# update packages and latest.json the in-app updater reads. The install
+# scripts are then tested against the draft on all three systems. Builds are
+# not OS code-signed unless the secrets in docs/RELEASING.md are set.
 
 on:
   push:
@@ -89,6 +91,10 @@ jobs:
       - uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Signs the update packages (required: the updater refuses
+          # anything that does not match the key in tauri.conf.json).
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: crates/rdm-gui
           tauriScript: tauri
@@ -101,6 +107,8 @@ jobs:
             These builds are **not code-signed**. macOS and Windows will warn on first launch; see [docs/RELEASING.md](https://github.com/${{ github.repository }}/blob/${{ github.ref_name }}/docs/RELEASING.md#installing-unsigned-builds). Verify downloads against `SHA256SUMS`.
           releaseDraft: true
           prerelease: false
+          # Windows updates use the per-user NSIS installer, like install.ps1.
+          updaterJsonPreferNsis: true
 
   extras:
     name: extension + checksums
@@ -126,3 +134,61 @@ jobs:
           rm -f assets/SHA256SUMS
           (cd assets && sha256sum -- * > SHA256SUMS && cat SHA256SUMS)
           gh release upload "$TAG" assets/SHA256SUMS --clobber
+
+  install-test:
+    name: install scripts (${{ matrix.os }})
+    needs: extras
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-22.04, windows-latest]
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Download the draft's packages
+        shell: bash
+        run: gh release download "$TAG" --dir dist --pattern 'rdm_*' --pattern SHA256SUMS
+
+      - name: macOS
+        if: runner.os == 'macOS'
+        run: |
+          apps="$RUNNER_TEMP/apps"
+          scripts/install.sh --from dist --prefix "$apps"
+          "$apps/rdm.app/Contents/MacOS/rdm-host" --version | grep -F "${TAG#v}"
+          scripts/install.sh --uninstall --prefix "$apps"
+          test ! -e "$apps/rdm.app"
+
+      - name: Linux (.deb)
+        if: runner.os == 'Linux'
+        run: |
+          scripts/install.sh --from dist
+          rdm-host --version | grep -F "${TAG#v}"
+          dpkg -s rdm | grep -F "Version: ${TAG#v}"
+          scripts/install.sh --uninstall
+          if dpkg-query -W -f='${Status}' rdm 2>/dev/null | grep -q 'ok installed'; then exit 1; fi
+
+      - name: Linux (AppImage)
+        if: runner.os == 'Linux'
+        run: |
+          scripts/install.sh --from dist --appimage
+          host="$HOME/.local/share/dev.rdm.desktop/browser-host"
+          "$host/rdm-host" --version | grep -F "${TAG#v}"
+          test "$(cat "$host/rdm-app-path")" = "$HOME/.local/bin/rdm.AppImage"
+          scripts/install.sh --uninstall
+          test ! -e "$HOME/.local/bin/rdm.AppImage"
+
+      - name: Windows (PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          .\scripts\install.ps1 -From dist
+          $hostExe = Join-Path $env:LOCALAPPDATA 'rdm\rdm-host.exe'
+          $out = & $hostExe --version
+          if ($out -notmatch [regex]::Escape($env:TAG.TrimStart('v'))) { throw "unexpected version: $out" }
+          .\scripts\install.ps1 -Uninstall
+          if (Test-Path $hostExe) { throw 'rdm-host.exe is still there after uninstalling' }

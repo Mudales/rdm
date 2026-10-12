@@ -26,6 +26,7 @@ async fn echo_server(endpoint: Endpoint) -> Server {
                     ids: (1..=items.len() as i64).collect(),
                 },
             },
+            _ => Response::Ok,
         }
     })
     .await

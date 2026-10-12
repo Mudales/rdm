@@ -648,7 +648,7 @@ $('#btn-add-empty').addEventListener('click', () => openAdd());
 $('#btn-start').addEventListener('click', startSelected);
 $('#btn-stop').addEventListener('click', stopSelected);
 $('#btn-remove').addEventListener('click', openRemove);
-$('#btn-settings').addEventListener('click', openSettings);
+$('#btn-settings').addEventListener('click', () => openSettings());
 $('#btn-queue').addEventListener('click', () => {
   const q = currentQueue();
   if (q) call(q.running ? 'stop_queue' : 'start_queue', { id: q.id });
@@ -859,6 +859,7 @@ $('#add-cancel').addEventListener('click', () => $('#dlg-add').close());
 // Show the next waiting browser/clipboard request once this one is done.
 $('#dlg-add').addEventListener('close', () => setTimeout(showNextPending, 0));
 
+/** Requests from the browser or clipboard, each a list of items. */
 const pendingAdds = [];
 async function drainPending() {
   try {
@@ -869,8 +870,10 @@ async function drainPending() {
   showNextPending();
 }
 function showNextPending() {
-  if ($('#dlg-add').open || !pendingAdds.length || !state.settings) return;
-  openAdd(pendingAdds.shift());
+  if ($('#dlg-add').open || $('#dlg-batch').open || !pendingAdds.length || !state.settings) return;
+  const items = pendingAdds.shift();
+  if (items.length === 1) openAdd(items[0]);
+  else openBatch(items);
 }
 
 async function submitAdd(start) {
@@ -908,6 +911,168 @@ $('#form-add').addEventListener('submit', (e) => {
 });
 $('#add-queue-btn').addEventListener('click', () => submitAdd('queue'));
 $('#add-paused').addEventListener('click', () => submitAdd('paused'));
+
+// ---------------------------------------------------------------------------
+// Batch dialog: several links from the browser ("download all", a selection)
+// ---------------------------------------------------------------------------
+
+/** File-type groups shared with the Capture settings. */
+let catalog = null;
+async function loadCatalog() {
+  catalog ??= await backend.invoke('capture_catalog');
+  return catalog;
+}
+function typeGroupOf(ext) {
+  return catalog?.groups.find((g) => g.extensions.includes(ext))?.name ?? 'Other';
+}
+
+function nameFromUrl(url) {
+  try {
+    const last = new URL(url).pathname.split('/').filter(Boolean).pop() ?? '';
+    try {
+      return decodeURIComponent(last) || new URL(url).host;
+    } catch {
+      return last;
+    }
+  } catch {
+    return url;
+  }
+}
+function extOf(name) {
+  const dot = name.lastIndexOf('.');
+  return dot > 0 ? name.slice(dot + 1).toLowerCase() : '';
+}
+
+const batch = { items: [], checked: new Set() };
+
+async function openBatch(items) {
+  await loadCatalog().catch(() => null);
+  batch.items = items.map((item, i) => {
+    const name = item.fileName || nameFromUrl(item.url);
+    const ext = extOf(name);
+    return { ...item, i, name, ext, group: ext ? typeGroupOf(ext) : 'Other' };
+  });
+  batch.checked = new Set(batch.items.map((it) => it.i));
+  let source = '';
+  try {
+    source = `From ${new URL(items[0].pageUrl ?? items[0].referer).host}`;
+  } catch {
+    /* no page */
+  }
+  $('#dlg-batch-title').textContent = `Add ${items.length} links`;
+  $('#batch-source').textContent = source;
+  $('#batch-filter').value = '';
+  $('#batch-error').textContent = '';
+  fillSelect($('#batch-queue'), state.queues.map((q) => [q.id, q.name]), currentQueue()?.id ?? MAIN_QUEUE);
+  renderBatch();
+  $('#dlg-batch').showModal();
+}
+
+function visibleBatch() {
+  const q = $('#batch-filter').value.trim().toLowerCase();
+  return batch.items.filter((it) => !q || it.name.toLowerCase().includes(q) || it.url.toLowerCase().includes(q));
+}
+
+function renderBatch() {
+  const visible = visibleBatch();
+  const groups = new Map();
+  for (const it of batch.items) {
+    const g = groups.get(it.group) ?? [];
+    g.push(it);
+    groups.set(it.group, g);
+  }
+  $('#batch-types').replaceChildren(
+    ...[...groups].map(([name, its]) => {
+      const all = its.every((it) => batch.checked.has(it.i));
+      return h(
+        'button',
+        {
+          type: 'button',
+          class: 'chip',
+          'aria-pressed': String(all),
+          title: all ? `Clear all ${name.toLowerCase()}` : `Select all ${name.toLowerCase()}`,
+          onclick: () => {
+            for (const it of its) all ? batch.checked.delete(it.i) : batch.checked.add(it.i);
+            renderBatch();
+          },
+        },
+        name,
+        h('span', { class: 'count', text: String(its.length) }),
+      );
+    }),
+  );
+  $('#batch-list').replaceChildren(
+    ...visible.map((it) =>
+      h(
+        'label',
+        { role: 'listitem', title: it.url },
+        h('input', {
+          type: 'checkbox',
+          checked: batch.checked.has(it.i),
+          onchange: (e) => {
+            e.target.checked ? batch.checked.add(it.i) : batch.checked.delete(it.i);
+            renderBatchCount();
+            renderBatchTypes();
+          },
+        }),
+        h('span', { class: 'name' }, it.name, h('span', { class: 'url', text: it.url })),
+        h('span', { class: 'ext', text: it.ext }),
+      ),
+    ),
+  );
+  renderBatchCount();
+}
+function renderBatchTypes() {
+  // Re-render only the chips, keeping the list (and its scroll) as is.
+  const scroll = $('#batch-list').scrollTop;
+  renderBatch();
+  $('#batch-list').scrollTop = scroll;
+}
+function renderBatchCount() {
+  const visible = visibleBatch();
+  const n = batch.checked.size;
+  $('#batch-count').textContent = `${n} of ${batch.items.length} selected`;
+  const all = $('#batch-all');
+  const shown = visible.filter((it) => batch.checked.has(it.i)).length;
+  all.checked = visible.length > 0 && shown === visible.length;
+  all.indeterminate = shown > 0 && shown < visible.length;
+  for (const b of $$('#dlg-batch .actions button:not(#batch-cancel)')) b.disabled = n === 0;
+}
+
+$('#batch-filter').addEventListener('input', renderBatch);
+$('#batch-all').addEventListener('change', (e) => {
+  for (const it of visibleBatch()) e.target.checked ? batch.checked.add(it.i) : batch.checked.delete(it.i);
+  renderBatch();
+});
+$('#batch-cancel').addEventListener('click', () => $('#dlg-batch').close());
+$('#dlg-batch').addEventListener('close', () => setTimeout(showNextPending, 0));
+
+async function submitBatch(start) {
+  const items = batch.items
+    .filter((it) => batch.checked.has(it.i))
+    .map(({ i, name, ext, group, ...item }) => item);
+  if (!items.length) return;
+  const buttons = $$('#dlg-batch .actions button');
+  for (const b of buttons) b.disabled = true;
+  $('#batch-error').textContent = '';
+  try {
+    const ids = await backend.invoke('add_batch', { items, start, queueId: Number($('#batch-queue').value) });
+    $('#dlg-batch').close();
+    const where = start === 'queue' ? ' to the queue' : '';
+    toast(`Added ${ids.length} download${ids.length === 1 ? '' : 's'}${where}.`);
+  } catch (e) {
+    $('#batch-error').textContent = errorText(e);
+  } finally {
+    for (const b of buttons) b.disabled = false;
+    renderBatchCount();
+  }
+}
+$('#form-batch').addEventListener('submit', (e) => {
+  e.preventDefault();
+  submitBatch('now');
+});
+$('#batch-queue-btn').addEventListener('click', () => submitBatch('queue'));
+$('#batch-paused').addEventListener('click', () => submitBatch('paused'));
 
 // ---------------------------------------------------------------------------
 // Settings dialog
@@ -1049,7 +1214,251 @@ $('#set-add-queue').addEventListener('click', () => {
   renderQueueEditor();
 });
 
-function openSettings() {
+// --- Capture tab -------------------------------------------------------------
+
+let skipped = [];
+
+function setExtensions(list) {
+  draft.capture.extensions = [...new Set(list)];
+  renderCapture();
+}
+function toggleExt(ext, on) {
+  const rest = draft.capture.extensions.filter((e) => e !== ext);
+  setExtensions(on ? [...rest, ext] : rest);
+}
+const typedExt = () => $('#cap-search').value.trim().toLowerCase().replace(/^\*?\./, '');
+
+function chip(ext, selected, match) {
+  return h('button', {
+    type: 'button',
+    class: `chip${match ? ' match' : ''}`,
+    'aria-pressed': String(selected),
+    text: ext,
+    title: selected ? `.${ext} downloads go to rdm` : `.${ext} downloads stay in the browser`,
+    onclick: () => toggleExt(ext, !selected),
+  });
+}
+
+function renderCapture() {
+  if (!catalog || !draft) return;
+  const selected = new Set(draft.capture.extensions);
+  const q = typedExt();
+  const known = new Set(catalog.groups.flatMap((g) => g.extensions));
+  const custom = draft.capture.extensions.filter((e) => !known.has(e));
+  const groups = [...catalog.groups, { id: 'custom', name: 'Added by you', extensions: custom }];
+
+  $('#cap-groups').replaceChildren(
+    ...groups.flatMap((g) => {
+      const shown = q ? g.extensions.filter((e) => e.includes(q)) : g.extensions;
+      if (!shown.length) return [];
+      const on = g.extensions.filter((e) => selected.has(e)).length;
+      const box = h('input', {
+        type: 'checkbox',
+        checked: on === g.extensions.length,
+        'aria-label': `All ${g.name.toLowerCase()} types`,
+        onchange: (e) => {
+          const rest = draft.capture.extensions.filter((x) => !g.extensions.includes(x));
+          setExtensions(e.target.checked ? [...rest, ...g.extensions] : rest);
+        },
+      });
+      box.indeterminate = on > 0 && on < g.extensions.length;
+      return [
+        h(
+          'section',
+          { class: 'type-group' },
+          h('header', {}, box, h('strong', { text: g.name }), h('span', { class: 'count', text: `${on} of ${g.extensions.length}` })),
+          h('div', { class: 'chips' }, shown.map((e) => chip(e, selected.has(e), q && e === q))),
+        ),
+      ];
+    }),
+  );
+
+  let summary = `${selected.size} file type${selected.size === 1 ? '' : 's'} go to rdm.`;
+  if (q && !known.has(q) && !selected.has(q)) summary = `.${q} is not listed. Press Enter or Add to select it.`;
+  else if (q && !$('#cap-groups').children.length) summary = `No listed type matches “${q}”.`;
+  $('#cap-summary').textContent = summary;
+  $('#cap-add').disabled = !q || selected.has(q) || /[\s/\\?#]/.test(q);
+
+  const offers = skipped.filter((t) => !selected.has(t.extension));
+  $('#cap-skipped').hidden = offers.length === 0;
+  $('#cap-skipped-list').replaceChildren(
+    ...offers.map((t) =>
+      h(
+        'span',
+        { class: 'chip', title: `Last downloaded ${fmtDate(t.lastSeen)}` },
+        h('strong', { text: `.${t.extension}` }),
+        h('span', { class: 'count', text: `×${t.count}` }),
+        h('button', { type: 'button', text: 'Add', onclick: () => toggleExt(t.extension, true) }),
+        h('button', {
+          type: 'button',
+          class: 'x',
+          text: '✕',
+          title: 'Stop suggesting this type',
+          'aria-label': `Stop suggesting .${t.extension}`,
+          onclick: async () => {
+            skipped = skipped.filter((x) => x !== t);
+            renderCapture();
+            await call('ignore_skipped', { extension: t.extension });
+          },
+        }),
+      ),
+    ),
+  );
+
+  renderRuleList('#cap-sites', draft.capture.excludedSites);
+  renderRuleList('#cap-addresses', draft.capture.excludedAddresses);
+}
+
+function renderRuleList(sel, list) {
+  $(sel).replaceChildren(
+    ...list.map((value, i) =>
+      h(
+        'span',
+        { class: 'chip' },
+        value,
+        h('button', {
+          type: 'button',
+          class: 'x',
+          text: '✕',
+          'aria-label': `Remove ${value}`,
+          onclick: () => {
+            list.splice(i, 1);
+            renderCapture();
+          },
+        }),
+      ),
+    ),
+  );
+}
+
+function addTyped() {
+  const q = typedExt();
+  if (!q || /[\s/\\?#]/.test(q)) return;
+  toggleExt(q, true);
+  $('#cap-search').value = '';
+  renderCapture();
+}
+$('#cap-search').addEventListener('input', renderCapture);
+$('#cap-search').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') {
+    e.preventDefault();
+    addTyped();
+  }
+});
+$('#cap-add').addEventListener('click', addTyped);
+$('#cap-preset').addEventListener('change', (e) => {
+  const groupExts = (...ids) => catalog.groups.filter((g) => ids.includes(g.id)).flatMap((g) => g.extensions);
+  const presets = {
+    default: () => catalog.defaults,
+    media: () => groupExts('video', 'audio'),
+    all: () => [...catalog.groups.flatMap((g) => g.extensions), ...draft.capture.extensions],
+    none: () => [],
+  };
+  if (presets[e.target.value]) setExtensions(presets[e.target.value]());
+  e.target.value = '';
+});
+
+function bindRuleInput(input, button, list, normalize) {
+  const addIt = () => {
+    const value = normalize($(input).value);
+    if (value && !list().includes(value)) list().push(value);
+    $(input).value = '';
+    renderCapture();
+  };
+  $(button).addEventListener('click', addIt);
+  $(input).addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      addIt();
+    }
+  });
+}
+bindRuleInput('#cap-site-input', '#cap-site-add', () => draft.capture.excludedSites, (v) => {
+  const t = v.trim().toLowerCase();
+  try {
+    return t.includes('://') ? new URL(t).hostname : t.replace(/^\*\./, '').split('/')[0];
+  } catch {
+    return t;
+  }
+});
+bindRuleInput('#cap-address-input', '#cap-address-add', () => draft.capture.excludedAddresses, (v) => v.trim());
+
+async function loadCaptureTab() {
+  try {
+    await loadCatalog();
+    skipped = await backend.invoke('skipped_types');
+  } catch (e) {
+    $('#cap-summary').textContent = errorText(e);
+  }
+  renderCapture();
+}
+
+// --- About tab ---------------------------------------------------------------
+
+const updater = { info: null, appInfo: null };
+
+function showUpdate(info) {
+  updater.info = info;
+  const pill = $('#update-pill');
+  pill.hidden = !info;
+  if (info) pill.textContent = `Update: rdm ${info.version}`;
+  $('#upd-box').hidden = !info;
+  if (!info) return;
+  $('#upd-title').textContent = `rdm ${info.version} is available${info.date ? ` (released ${info.date})` : ''}.`;
+  $('#upd-notes').hidden = !info.notes;
+  $('#upd-notes').textContent = info.notes ?? '';
+  const canInstall = updater.appInfo?.canInstall ?? true;
+  $('#upd-install').hidden = !canInstall;
+  $('#upd-hint').textContent = canInstall
+    ? 'Running downloads are stopped and saved first; they continue after the restart.'
+    : 'This copy of rdm was installed by your package manager. Download the new package from the release page.';
+}
+
+async function loadAbout() {
+  $('#upd-error').textContent = '';
+  try {
+    updater.appInfo = await backend.invoke('app_info');
+    $('#about-version').textContent = updater.appInfo.version;
+    showUpdate(updater.appInfo.available ?? updater.info);
+  } catch (e) {
+    $('#upd-error').textContent = errorText(e);
+  }
+}
+
+$('#upd-check').addEventListener('click', async () => {
+  const btn = $('#upd-check');
+  btn.disabled = true;
+  $('#upd-error').textContent = '';
+  $('#upd-status').textContent = 'Checking…';
+  try {
+    const info = await backend.invoke('check_update');
+    showUpdate(info);
+    $('#upd-status').textContent = info ? '' : `rdm ${updater.appInfo?.version ?? ''} is the latest version.`;
+  } catch (e) {
+    $('#upd-status').textContent = '';
+    $('#upd-error').textContent = `Could not check for updates: ${errorText(e)}`;
+  } finally {
+    btn.disabled = false;
+  }
+});
+$('#upd-install').addEventListener('click', async () => {
+  const running = [...state.records.values()].filter((r) => r.status === 'downloading').length;
+  if (running && !confirm(`${running} download${running === 1 ? ' is' : 's are'} running. Stop, install the update and restart rdm?`)) return;
+  for (const b of $$('#upd-box button')) b.disabled = true;
+  $('#upd-progress').hidden = false;
+  $('#upd-error').textContent = '';
+  try {
+    await backend.invoke('install_update');
+  } catch (e) {
+    $('#upd-error').textContent = errorText(e);
+    $('#upd-progress').hidden = true;
+    for (const b of $$('#upd-box button')) b.disabled = false;
+  }
+});
+$('#upd-page').addEventListener('click', () => call('open_releases_page'));
+$('#update-pill').addEventListener('click', () => openSettings('about'));
+
+function openSettings(tab = 'general') {
   draft = structuredClone(state.settings);
   $('#set-dir').value = draft.defaultDirectory;
   $('#set-tray').checked = draft.closeToTray;
@@ -1064,9 +1473,15 @@ function openSettings() {
   for (const r of $$('input[name=proxy]')) r.checked = r.value === draft.proxy.mode;
   $('#set-proxy-url').value = draft.proxy.url ?? '';
   $('#set-error').textContent = '';
+  $('#set-check-updates').checked = draft.checkUpdates;
+  $('#cap-search').value = '';
+  $('#cap-min').value = draft.capture.minSize ? +(draft.capture.minSize / 1e6).toFixed(2) : 0;
+  $('#cap-inline').checked = draft.capture.captureInline;
   renderCategoryEditor();
   renderQueueEditor();
-  showTab('general');
+  loadCaptureTab();
+  loadAbout();
+  showTab(tab);
   $('#dlg-settings').showModal();
 }
 
@@ -1169,6 +1584,12 @@ $('#form-settings').addEventListener('submit', async (e) => {
     minSplit: Number($('#set-split').value) * 1024,
     globalSpeedLimit: limit > 0 ? limit * 1024 : null,
     proxy: mode === 'custom' ? { mode, url: $('#set-proxy-url').value.trim() } : { mode },
+    checkUpdates: $('#set-check-updates').checked,
+    capture: {
+      ...draft.capture,
+      minSize: Number($('#cap-min').value) > 0 ? Math.round(Number($('#cap-min').value) * 1e6) : null,
+      captureInline: $('#cap-inline').checked,
+    },
   };
   try {
     state.settings = await backend.invoke('update_settings', { settings });
@@ -1348,6 +1769,24 @@ readPalette();
 await backend.listen('rdm://event', handleEvent);
 await backend.listen('rdm://resync', loadAll);
 await backend.listen('rdm://add-request', drainPending);
+await backend.listen('rdm://show-view', (view) => {
+  if (view === 'captureSettings' && !$('#dlg-settings').open) openSettings('capture');
+  else if (view === 'captureSettings') showTab('capture');
+});
+await backend.listen('rdm://update-available', (info) => showUpdate(info));
+await backend.listen('rdm://update-progress', ({ downloaded, total }) => {
+  const bar = $('#upd-progress');
+  bar.hidden = false;
+  if (total) bar.value = downloaded / total;
+  else bar.removeAttribute('value');
+});
 await loadAll();
 await drainPending();
+backend
+  .invoke('app_info')
+  .then((info) => {
+    updater.appInfo = info;
+    if (info.available) showUpdate(info.available);
+  })
+  .catch(() => {});
 new ResizeObserver(() => scheduleRender()).observe($('#table-wrap'));

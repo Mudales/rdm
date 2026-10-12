@@ -71,6 +71,8 @@
 
   <footer class="statusbar">
     <span id="status-active">Idle</span>
+    <span class="spacer"></span>
+    <button type="button" id="update-pill" class="pill" hidden></button>
     <span id="status-speed"></span>
   </footer>
 
@@ -177,8 +179,10 @@
         <button type="button" role="tab" data-tab="connection">Connection</button>
         <button type="button" role="tab" data-tab="categories">Categories</button>
         <button type="button" role="tab" data-tab="queues">Queues</button>
+        <button type="button" role="tab" data-tab="capture">Capture</button>
         <button type="button" role="tab" data-tab="browser">Browser</button>
         <button type="button" role="tab" data-tab="media">Media</button>
+        <button type="button" role="tab" data-tab="about">About</button>
       </div>
 
       <section class="tab" data-tab="general">
@@ -239,8 +243,49 @@
         <button type="button" id="set-add-queue">Add queue</button>
       </section>
 
+      <section class="tab capture" data-tab="capture" hidden>
+        <p class="hint">Downloads of the selected file types go to rdm instead of the browser (Alt+click a link to let the browser have it). Click a type to select or clear it.</p>
+        <div class="row capture-tools">
+          <input id="cap-search" type="search" placeholder="Find or add a file type, e.g. torrent" spellcheck="false" aria-label="Find or add a file type">
+          <button type="button" id="cap-add" title="Add the typed extension">Add</button>
+          <select id="cap-preset" aria-label="Presets">
+            <option value="">Presets…</option>
+            <option value="default">rdm defaults</option>
+            <option value="media">Video and audio only</option>
+            <option value="all">Everything listed</option>
+            <option value="none">Nothing</option>
+          </select>
+        </div>
+        <p class="hint" id="cap-summary" aria-live="polite"></p>
+        <div class="skipped" id="cap-skipped" hidden>
+          <h3 class="subhead">Downloaded by the browser recently</h3>
+          <p class="hint">These types were not selected, so the browser kept them. Add any you want rdm to take.</p>
+          <div class="chips" id="cap-skipped-list"></div>
+        </div>
+        <div class="type-groups" id="cap-groups"></div>
+        <h3 class="subhead">Rules</h3>
+        <label class="check">Only files larger than <input id="cap-min" type="number" min="0" step="0.1" class="inline-num" aria-label="Minimum size in MB"> MB <span class="hint">(0 = any size; applies when the size is known)</span></label>
+        <label class="check"><input type="checkbox" id="cap-inline"> Also take files of these types that would open in a browser tab (PDFs, images, videos)</label>
+        <div class="field">
+          <span>Never take downloads from these sites (subdomains included)</span>
+          <div class="chips editable" id="cap-sites"></div>
+          <div class="row">
+            <input id="cap-site-input" type="text" placeholder="example.com" spellcheck="false" aria-label="Site to exclude">
+            <button type="button" id="cap-site-add">Add site</button>
+          </div>
+        </div>
+        <div class="field">
+          <span>Never take downloads from these addresses (* matches anything; otherwise addresses starting with it)</span>
+          <div class="chips editable" id="cap-addresses"></div>
+          <div class="row">
+            <input id="cap-address-input" type="text" placeholder="https://example.com/raw/*" spellcheck="false" aria-label="Address pattern to exclude">
+            <button type="button" id="cap-address-add">Add address</button>
+          </div>
+        </div>
+      </section>
+
       <section class="tab" data-tab="browser" hidden>
-        <label class="check"><input type="checkbox" id="set-clipboard"> Offer to download links to known file types when they are copied</label>
+        <label class="check"><input type="checkbox" id="set-clipboard"> Offer to download links that are copied, when they point to a file type selected under Capture</label>
         <h3 class="subhead">Browser extension</h3>
         <p class="hint">The rdm extension sends links, videos and captured downloads to this app through a small helper (rdm-host). Register the helper with your browsers, then install the extension.</p>
         <div class="list-editor browsers" id="set-browsers" aria-live="polite"></div>
@@ -261,11 +306,64 @@
         <p class="error" id="ffmpeg-error" role="alert"></p>
       </section>
 
+      <section class="tab" data-tab="about" hidden>
+        <div class="about-head">
+          <img src="icon.png" alt="" width="48" height="48">
+          <div>
+            <strong>rdm</strong> <span id="about-version"></span>
+            <p class="hint">Rust Download Manager · MIT License</p>
+          </div>
+        </div>
+        <div class="row">
+          <button type="button" id="upd-check">Check for updates</button>
+          <span class="hint upd-status" id="upd-status" aria-live="polite"></span>
+        </div>
+        <div class="update-box" id="upd-box" hidden>
+          <strong id="upd-title"></strong>
+          <pre class="notes" id="upd-notes" hidden></pre>
+          <progress id="upd-progress" max="1" value="0" hidden></progress>
+          <div class="row">
+            <button type="button" class="primary" id="upd-install">Install and restart</button>
+            <button type="button" id="upd-page">Open the download page</button>
+          </div>
+          <p class="hint" id="upd-hint"></p>
+        </div>
+        <p class="error" id="upd-error" role="alert"></p>
+        <label class="check"><input type="checkbox" id="set-check-updates"> Check for updates automatically (at startup and once a day)</label>
+        <p class="hint">Updates come from the project's GitHub releases and are installed only if their signature matches the key built into rdm.</p>
+      </section>
+
       <p class="error" id="set-error" role="alert"></p>
       <div class="actions">
         <div class="spacer"></div>
         <button type="button" id="set-cancel">Cancel</button>
         <button type="submit" class="primary">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Several links from the browser -->
+  <dialog id="dlg-batch" class="wide" aria-labelledby="dlg-batch-title">
+    <form method="dialog" id="form-batch">
+      <h2 id="dlg-batch-title">Add links</h2>
+      <p class="hint" id="batch-source"></p>
+      <div class="row">
+        <input id="batch-filter" type="search" placeholder="Filter by name or address" spellcheck="false" aria-label="Filter links">
+      </div>
+      <div class="chips" id="batch-types" aria-label="Select by type"></div>
+      <div class="batch-list" id="batch-list" role="list"></div>
+      <div class="row batch-foot">
+        <label class="check"><input type="checkbox" id="batch-all"> <span id="batch-count"></span></label>
+        <div class="spacer"></div>
+        <label class="check">Queue <select id="batch-queue" class="inline-select"></select></label>
+      </div>
+      <p class="error" id="batch-error" role="alert"></p>
+      <div class="actions">
+        <div class="spacer"></div>
+        <button type="button" id="batch-cancel">Cancel</button>
+        <button type="button" id="batch-paused">Add stopped</button>
+        <button type="button" id="batch-queue-btn">Add to queue</button>
+        <button type="submit" class="primary" id="batch-now">Start now</button>
       </div>
     </form>
   </dialog>

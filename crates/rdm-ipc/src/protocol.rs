@@ -23,6 +23,37 @@ pub enum Request {
         #[serde(default)]
         mode: AddMode,
     },
+    /// Which downloads to take over (answered with
+    /// [`Response::CaptureRules`]).
+    GetCaptureRules,
+    /// The browser kept a download because its file type is not selected.
+    ReportSkipped { extension: String },
+    /// Take over (or stop taking over) downloads from a site.
+    SetSiteCapture { host: String, capture: bool },
+    /// Bring the app's window forward.
+    Show {
+        #[serde(default)]
+        view: AppView,
+    },
+}
+
+impl Request {
+    /// Whether `rdm-host` should start the app to answer. Requests that
+    /// only query or tweak settings are answered with
+    /// [`Response::NotRunning`] instead.
+    pub fn launches_app(&self) -> bool {
+        matches!(self, Request::Add { .. } | Request::Show { .. })
+    }
+}
+
+/// What [`Request::Show`] opens.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AppView {
+    #[default]
+    Downloads,
+    /// Settings, on the tab that chooses which downloads are taken over.
+    CaptureSettings,
 }
 
 /// One URL to download, with the browser context servers often require.
@@ -70,8 +101,16 @@ pub enum Response {
     Added {
         ids: Vec<i64>,
     },
-    /// The Add dialog was shown to the user.
+    /// The Add dialog (or the window) was shown to the user.
     Shown,
+    /// The app's capture settings (`rdm_manager::CaptureSettings` as JSON:
+    /// `extensions`, `minSize`, `excludedSites`, `excludedAddresses`,
+    /// `captureInline`). Kept as JSON so the host relays it unchanged.
+    CaptureRules {
+        rules: serde_json::Value,
+    },
+    /// Done; nothing to report.
+    Ok,
     /// Sent by `rdm-host` for a `ping` when the app is not running (pings
     /// never launch the app; adding a download does).
     NotRunning,
@@ -118,5 +157,34 @@ mod tests {
             r#"{"type":"added","ids":[3]}"#
         );
         assert!(serde_json::from_str::<Request>(r#"{"type":"format-disk"}"#).is_err());
+
+        let r: Request =
+            serde_json::from_str(r#"{"type":"setSiteCapture","host":"x.org","capture":false}"#)
+                .unwrap();
+        assert!(!r.launches_app());
+        let r: Request = serde_json::from_str(r#"{"type":"show"}"#).unwrap();
+        assert_eq!(
+            r,
+            Request::Show {
+                view: AppView::Downloads
+            }
+        );
+        assert!(r.launches_app());
+        let r: Request =
+            serde_json::from_str(r#"{"type":"show","view":"captureSettings"}"#).unwrap();
+        assert_eq!(
+            r,
+            Request::Show {
+                view: AppView::CaptureSettings
+            }
+        );
+        assert_eq!(
+            serde_json::to_string(&Request::GetCaptureRules).unwrap(),
+            r#"{"type":"getCaptureRules"}"#
+        );
+        assert_eq!(
+            serde_json::to_string(&Response::Ok).unwrap(),
+            r#"{"type":"ok"}"#
+        );
     }
 }

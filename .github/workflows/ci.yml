@@ -62,10 +62,33 @@ jobs:
       - uses: actions/setup-node@v5
         with:
           node-version: 22
-      - name: Unit tests (lib/detect.js)
+      - name: Unit tests (lib/detect.js, lib/capture.js)
         run: node --test extension/test/*.test.mjs
+      - name: Scripts parse
+        run: for f in extension/*.js extension/lib/*.js; do node --input-type=module --check < "$f" || exit 1; done
       - name: Manifest is valid JSON
         run: node -e "JSON.parse(require('fs').readFileSync('extension/manifest.json', 'utf8'))"
+
+  install-scripts:
+    name: install scripts (lint)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - name: shellcheck install.sh
+        if: runner.os == 'Linux'
+        run: shellcheck --shell=sh scripts/install.sh
+      - name: Parse install.ps1 (Windows PowerShell 5.1)
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile("$pwd\scripts\install.ps1", [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) { $errors | Format-List; exit 1 }
 
   guards:
     name: dependency guards

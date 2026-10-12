@@ -1,0 +1,183 @@
+{
+  "comment": "Shared by crates/rdm-manager/src/capture.rs and extension/lib/capture.js tests. Rules are given as the app sends them (already normalized).",
+  "defaultExtensions": [
+    "mp4",
+    "mkv",
+    "webm",
+    "avi",
+    "mov",
+    "wmv",
+    "flv",
+    "m4v",
+    "mpg",
+    "mpeg",
+    "3gp",
+    "ogv",
+    "ts",
+    "m2ts",
+    "vob",
+    "rm",
+    "rmvb",
+    "asf",
+    "mp3",
+    "m4a",
+    "aac",
+    "flac",
+    "wav",
+    "ogg",
+    "oga",
+    "opus",
+    "wma",
+    "aiff",
+    "alac",
+    "mka",
+    "zip",
+    "rar",
+    "7z",
+    "tar",
+    "gz",
+    "tgz",
+    "bz2",
+    "xz",
+    "zst",
+    "lz",
+    "lzma",
+    "cab",
+    "arj",
+    "exe",
+    "msi",
+    "msix",
+    "msu",
+    "appx",
+    "apk",
+    "aab",
+    "deb",
+    "rpm",
+    "appimage",
+    "pkg",
+    "jar",
+    "flatpak",
+    "snap",
+    "iso",
+    "img",
+    "dmg",
+    "vhd",
+    "vhdx",
+    "vmdk",
+    "qcow2",
+    "pdf",
+    "epub",
+    "mobi",
+    "djvu"
+  ],
+  "rules": {
+    "extensions": [
+      "zip",
+      "mp4",
+      "pdf",
+      "r0*",
+      "exe"
+    ],
+    "minSize": 1048576,
+    "excludedSites": [
+      "update.example.com",
+      "cdn.example.org"
+    ],
+    "excludedAddresses": [
+      "https://example.net/raw/",
+      "https://*.example.io/*/nocapture/*"
+    ],
+    "captureInline": false
+  },
+  "cases": [
+    {
+      "url": "https://example.com/files/a.zip",
+      "expect": "capture"
+    },
+    {
+      "url": "https://example.com/files/A.ZIP?token=1#x",
+      "expect": "capture"
+    },
+    {
+      "url": "https://example.com/download?id=7",
+      "fileName": "Report.PDF",
+      "expect": "capture"
+    },
+    {
+      "url": "https://example.com/files/movie.mp4",
+      "fileName": "",
+      "expect": "capture"
+    },
+    {
+      "url": "https://example.com/files/b.zip",
+      "size": 1000,
+      "expect": "tooSmall"
+    },
+    {
+      "url": "https://example.com/files/b.zip",
+      "size": 1048576,
+      "expect": "capture"
+    },
+    {
+      "url": "https://example.com/parts/archive.r00",
+      "expect": "capture"
+    },
+    {
+      "url": "https://example.com/notes.txt",
+      "expect": "notSelected",
+      "extension": "txt"
+    },
+    {
+      "url": "https://example.com/download",
+      "expect": "notSelected",
+      "extension": ""
+    },
+    {
+      "url": "https://example.com/get",
+      "fileName": "data.JSON",
+      "expect": "notSelected",
+      "extension": "json"
+    },
+    {
+      "url": "https://example.com/.hidden",
+      "expect": "notSelected",
+      "extension": ""
+    },
+    {
+      "url": "https://update.example.com/setup.exe",
+      "expect": "excludedSite"
+    },
+    {
+      "url": "https://a.update.example.com/setup.exe",
+      "expect": "excludedSite"
+    },
+    {
+      "url": "https://notupdate.example.com/setup.exe",
+      "expect": "capture"
+    },
+    {
+      "url": "https://x.cdn.example.org/a.zip",
+      "expect": "excludedSite"
+    },
+    {
+      "url": "https://cdn.example.org/a.zip",
+      "expect": "excludedSite"
+    },
+    {
+      "url": "https://example.net/raw/a.zip",
+      "expect": "excludedAddress"
+    },
+    {
+      "url": "https://example.net/rawx/a.zip",
+      "expect": "capture"
+    },
+    {
+      "url": "https://dl.example.io/u/nocapture/a.zip",
+      "expect": "excludedAddress"
+    },
+    {
+      "url": "https://example.io/u/nocapture/a.zip",
+      "expect": "capture"
+    }
+  ]
+}

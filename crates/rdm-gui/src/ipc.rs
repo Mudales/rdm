@@ -2,13 +2,13 @@
 
 use std::sync::Arc;
 
-use rdm_ipc::{AddItem, AddMode, Endpoint, PROTOCOL_VERSION, Request, Response, Server};
+use rdm_ipc::{AddItem, AddMode, AppView, Endpoint, PROTOCOL_VERSION, Request, Response, Server};
 use rdm_manager::{Manager, NewDownload, StartMode, StreamChoice, error_chain};
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-use crate::request_add;
+use crate::{SHOW_VIEW, request_add, show_main_window};
 
 /// Batch adds probe each URL; this many at once.
 const PARALLEL_ADDS: usize = 6;
@@ -32,26 +32,61 @@ async fn handle(app: &AppHandle, manager: &Arc<Manager>, request: Request) -> Re
             protocol: PROTOCOL_VERSION,
         },
         Request::Add { items, .. } if items.is_empty() => Response::error("nothing to add"),
-        // One item, user confirms: open the prefilled Add dialog.
+        // The user confirms: one item opens the prefilled Add dialog,
+        // several the batch dialog.
         Request::Add {
-            mut items,
+            items,
             mode: AddMode::Ask,
-        } if items.len() == 1 => {
-            request_add(app, items.remove(0));
+        } => {
+            request_add(app, items);
             Response::Shown
         }
         Request::Add { items, mode } => {
             let start = match mode {
                 AddMode::Now => StartMode::Now,
-                // Several items without confirmation go into the queue.
                 AddMode::Queue | AddMode::Ask => StartMode::Queue,
             };
-            add_all(manager, items, start).await
+            match add_all(manager, items, start, None).await {
+                Ok(ids) => Response::Added { ids },
+                Err(e) => Response::error(e),
+            }
+        }
+        Request::GetCaptureRules => rules(manager),
+        Request::ReportSkipped { extension } => match manager.note_skipped(&extension) {
+            Ok(()) => Response::Ok,
+            Err(e) => Response::error(error_chain(&e)),
+        },
+        Request::SetSiteCapture { host, capture } => {
+            match manager.set_site_capture(&host, capture) {
+                Ok(_) => rules(manager),
+                Err(e) => Response::error(error_chain(&e)),
+            }
+        }
+        Request::Show { view } => {
+            show_main_window(app);
+            if view != AppView::Downloads {
+                let _ = app.emit(SHOW_VIEW, view);
+            }
+            Response::Shown
         }
     }
 }
 
-async fn add_all(manager: &Arc<Manager>, items: Vec<AddItem>, start: StartMode) -> Response {
+fn rules(manager: &Manager) -> Response {
+    match serde_json::to_value(manager.settings().capture) {
+        Ok(rules) => Response::CaptureRules { rules },
+        Err(e) => Response::error(e.to_string()),
+    }
+}
+
+/// Adds several downloads (probing a few at a time). Fails only when none
+/// could be added; partial failures are reported as a notice.
+pub(crate) async fn add_all(
+    manager: &Arc<Manager>,
+    items: Vec<AddItem>,
+    start: StartMode,
+    queue_id: Option<u32>,
+) -> Result<Vec<i64>, String> {
     let limit = Arc::new(Semaphore::new(PARALLEL_ADDS));
     let mut tasks = JoinSet::new();
     for (index, item) in items.into_iter().enumerate() {
@@ -60,7 +95,9 @@ async fn add_all(manager: &Arc<Manager>, items: Vec<AddItem>, start: StartMode) 
         tasks.spawn(async move {
             let _permit = limit.acquire_owned().await;
             let url = item.url.clone();
-            let result = manager.add(to_new_download(item, start)).await;
+            let mut new = to_new_download(item, start);
+            new.queue_id = queue_id;
+            let result = manager.add(new).await;
             (index, url, result)
         });
     }
@@ -75,7 +112,10 @@ async fn add_all(manager: &Arc<Manager>, items: Vec<AddItem>, start: StartMode) 
     }
     added.sort_unstable();
     if added.is_empty() {
-        return Response::error(failures.into_iter().next().unwrap_or_default());
+        return Err(failures
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| "nothing to add".into()));
     }
     if !failures.is_empty() {
         manager.notice(format!(
@@ -85,9 +125,7 @@ async fn add_all(manager: &Arc<Manager>, items: Vec<AddItem>, start: StartMode) 
             failures.join("; ")
         ));
     }
-    Response::Added {
-        ids: added.into_iter().map(|(_, id)| id).collect(),
-    }
+    Ok(added.into_iter().map(|(_, id)| id).collect())
 }
 
 fn to_new_download(item: AddItem, start: StartMode) -> NewDownload {

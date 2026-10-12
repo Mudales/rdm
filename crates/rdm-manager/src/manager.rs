@@ -20,6 +20,7 @@ use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
 use crate::antivirus;
+use crate::capture::{self, MAX_SKIPPED, SkippedType};
 use crate::checksum::{self, Algorithm, Checksum};
 use crate::error::{Error, Result, error_chain};
 use crate::model::{
@@ -79,7 +80,12 @@ struct State {
     busy_queues: HashSet<u32>,
     /// Wall-clock time of the last schedule check.
     last_schedule_check: jiff::Zoned,
+    /// File types the browser downloaded without rdm, most recent first.
+    skipped: Vec<SkippedType>,
 }
+
+/// Settings-table key of the skipped file types.
+const SKIPPED_KEY: &str = "capture_skipped";
 
 /// Schedule checks happen this often (in progress ticks).
 const SCHEDULE_EVERY_TICKS: u32 = 10;
@@ -193,6 +199,12 @@ impl Manager {
             records.insert(r.id, r);
         }
 
+        // Only a convenience list: start empty if it cannot be read.
+        let skipped = store
+            .load_value(SKIPPED_KEY)?
+            .and_then(|json| serde_json::from_str(&json).ok())
+            .unwrap_or_default();
+
         let engine = Engine::new(EngineConfig {
             global_speed_limit: settings.global_speed_limit.and_then(NonZeroU64::new),
             ..engine_config
@@ -216,6 +228,7 @@ impl Manager {
                 next_position,
                 busy_queues: HashSet::new(),
                 last_schedule_check: jiff::Zoned::now(),
+                skipped,
             }),
         });
         let ticker = runtime.spawn(ticker(Arc::downgrade(&inner)));
@@ -293,6 +306,86 @@ impl Manager {
         inner.emit(ManagerEvent::Settings(Box::new(settings.clone())));
         inner.emit(ManagerEvent::Queues(queues));
         Ok(settings)
+    }
+
+    /// File types the browser downloaded without rdm, most recent first,
+    /// minus the ones the user dismissed or has since selected.
+    pub fn skipped_types(&self) -> Vec<SkippedType> {
+        let st = self.inner.state();
+        st.skipped
+            .iter()
+            .filter(|s| !s.ignored && !captures_extension(&st.settings, &s.extension))
+            .cloned()
+            .collect()
+    }
+
+    /// Records that the browser downloaded a file of this type itself
+    /// because it is not in the capture list.
+    pub fn note_skipped(&self, extension: &str) -> Result<()> {
+        let ext = extension
+            .trim()
+            .trim_start_matches('.')
+            .to_ascii_lowercase();
+        let plausible = (1..=12).contains(&ext.len())
+            && ext
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-');
+        if !plausible {
+            return Ok(());
+        }
+        let mut st = self.inner.state();
+        if captures_extension(&st.settings, &ext) {
+            return Ok(());
+        }
+        let mut entry = match st.skipped.iter().position(|s| s.extension == ext) {
+            Some(i) => st.skipped.remove(i),
+            None => SkippedType {
+                extension: ext,
+                count: 0,
+                last_seen: 0,
+                ignored: false,
+            },
+        };
+        entry.count = entry.count.saturating_add(1);
+        entry.last_seen = now();
+        st.skipped.insert(0, entry);
+        st.skipped.truncate(MAX_SKIPPED);
+        self.save_skipped(&st.skipped)
+    }
+
+    /// Stops offering a skipped file type.
+    pub fn ignore_skipped(&self, extension: &str) -> Result<()> {
+        let mut st = self.inner.state();
+        let ext = extension.to_ascii_lowercase();
+        for s in st.skipped.iter_mut().filter(|s| s.extension == ext) {
+            s.ignored = true;
+        }
+        self.save_skipped(&st.skipped)
+    }
+
+    fn save_skipped(&self, skipped: &[SkippedType]) -> Result<()> {
+        let json = serde_json::to_string(skipped).map_err(|e| Error::Corrupt(e.to_string()))?;
+        self.inner.store.save_value(SKIPPED_KEY, &json)
+    }
+
+    /// Takes over (or stops taking over) downloads from `host` and its
+    /// subdomains.
+    pub fn set_site_capture(&self, host: &str, capture: bool) -> Result<Settings> {
+        let host = capture::site_host(host);
+        if host.is_empty() {
+            return Err(Error::InvalidSettings("no site given".into()));
+        }
+        let mut settings = self.settings();
+        let captured = settings.capture.captures_site(&host);
+        let sites = &mut settings.capture.excluded_sites;
+        if capture {
+            // Also lift an exclusion of a parent domain, or the site would
+            // stay excluded.
+            sites.retain(|s| !(host == *s || host.ends_with(&format!(".{s}"))));
+        } else if captured {
+            sites.push(host);
+        }
+        self.update_settings(settings)
     }
 
     pub fn queues(&self) -> Vec<QueueState> {
@@ -1479,6 +1572,10 @@ fn remove_files(path: &Path) {
             tracing::warn!("could not delete {}: {e}", p.display());
         }
     }
+}
+
+fn captures_extension(settings: &Settings, ext: &str) -> bool {
+    settings.capture.selects_extension(ext)
 }
 
 fn now() -> i64 {

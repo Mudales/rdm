@@ -10,18 +10,9 @@ export const KINDS = {
   images: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg', 'bmp', 'tif', 'tiff', 'heic'],
 };
 
-/** Downloads with these extensions are handed to rdm by default. */
-export const DEFAULT_CAPTURE_EXTENSIONS = [
-  ...KINDS.video,
-  ...KINDS.audio,
-  ...KINDS.archives,
-  ...KINDS.programs,
-  'pdf', 'epub',
-];
-
+/** This browser's own switches. Which file types go to rdm is set in the app. */
 export const DEFAULT_SETTINGS = {
   captureDownloads: true,
-  captureExtensions: DEFAULT_CAPTURE_EXTENSIONS,
   showVideoButton: true,
 };
 
@@ -134,17 +125,18 @@ export function filterLinks(links, { kinds = [], extensions = [], sameHost = fal
 }
 
 /**
- * Whether a browser download should be handed to rdm. `item` is a
- * downloads.DownloadItem: { url, finalUrl, filename, byExtensionId }.
+ * A browser download rdm could take, before the app's capture rules apply:
+ * `{ url, fileName, size, mime }`, or null when capturing is off, another
+ * extension started it, or it is not http(s) (blob:, data:, file:).
+ * `item` is a downloads.DownloadItem.
  */
-export function shouldCapture(item, settings) {
-  if (!settings.captureDownloads || item.byExtensionId) return false;
+export function downloadCandidate(item, settings) {
+  if (!settings.captureDownloads || item.byExtensionId) return null;
   const url = item.finalUrl || item.url;
-  if (!isHttp(url)) return false; // blob:, data:, file:
-  const name = (item.filename ?? '').split(/[\\/]/).pop();
-  const dot = name.lastIndexOf('.');
-  const ext = dot > 0 ? name.slice(dot + 1).toLowerCase() : extensionOf(url);
-  return settings.captureExtensions.includes(ext);
+  if (!isHttp(url)) return null;
+  const fileName = (item.filename ?? '').split(/[\\/]/).pop() || null;
+  const size = item.fileSize > 0 ? item.fileSize : item.totalBytes > 0 ? item.totalBytes : null;
+  return { url, fileName, size, mime: item.mime || null };
 }
 
 const UNITS = ['B', 'KiB', 'MiB', 'GiB', 'TiB'];
@@ -169,4 +161,41 @@ export function describe(item) {
   if (item.size) parts.push(formatBytes(item.size));
   if (item.contentType && (item.kind === 'video' || item.kind === 'audio')) parts.push(item.contentType);
   return parts.join(' · ');
+}
+
+/** The file name in a Content-Disposition header, or ''. */
+export function dispositionFileName(value) {
+  if (!value) return '';
+  const star = value.match(/filename\*\s*=\s*([^']*)'[^']*'([^;]+)/i);
+  if (star) {
+    try {
+      return decodeURIComponent(star[2].trim().replace(/^"|"$/g, ''));
+    } catch {
+      /* fall back to the plain parameter */
+    }
+  }
+  const plain = value.match(/filename\s*=\s*("([^"]*)"|[^;]+)/i);
+  const name = (plain?.[2] ?? plain?.[1] ?? '').trim();
+  return name.split(/[\\/]/).pop() ?? '';
+}
+
+/** Extensions of web pages rather than files. */
+const PAGE_EXTENSIONS = new Set(['html', 'htm', 'xhtml', 'shtml', 'php', 'asp', 'aspx', 'jsp', 'cgi', 'pl', 'do', 'action', 'cfm']);
+
+/**
+ * Links that point to files (an extension that is not a web page's), for
+ * "download all links": http(s) only, de-duplicated, in page order.
+ */
+export function fileLinks(links) {
+  const seen = new Set();
+  const out = [];
+  for (const link of links) {
+    const url = mediaKey(link.url ?? link);
+    if (!isHttp(url) || seen.has(url)) continue;
+    const ext = extensionOf(url);
+    if (!ext || PAGE_EXTENSIONS.has(ext)) continue;
+    seen.add(url);
+    out.push({ url, text: link.text ?? '' });
+  }
+  return out;
 }

@@ -103,7 +103,7 @@ input[type=text], input[type=url], input[type=number], input[type=search], selec
   border-bottom: 1px solid var(--border);
 }
 .toolbar .sep { width: 1px; height: 22px; background: var(--border); margin: 0 4px; }
-.toolbar .spacer, .actions .spacer { flex: 1; }
+.toolbar .spacer, .actions .spacer, .statusbar .spacer, .row .spacer { flex: 1; }
 .toolbar #search { width: 220px; }
 
 /* Layout */
@@ -221,7 +221,8 @@ td.num { font-variant-numeric: tabular-nums; }
 /* Status bar */
 .statusbar {
   display: flex;
-  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
   padding: 4px 12px;
   border-top: 1px solid var(--border);
   background: var(--panel);
@@ -326,6 +327,55 @@ menu.context hr { border: 0; border-top: 1px solid var(--border); margin: 4px 2p
   user-select: text;
 }
 .toast.error { border-left-color: var(--error); }
+
+/* Update notice */
+.pill { padding: 1px 10px; border-radius: 999px; border-color: var(--accent); color: var(--accent); background: var(--accent-soft); font-size: 12px; font-weight: 600; }
+.about-head { display: flex; gap: 12px; align-items: center; }
+.about-head p { margin: 2px 0 0; }
+.upd-status { align-self: center; }
+.update-box { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 8px; background: var(--accent-soft); }
+.update-box .notes { margin: 0; max-height: 140px; overflow: auto; white-space: pre-wrap; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; -webkit-user-select: text; user-select: text; }
+.update-box progress { width: 100%; }
+
+/* Chips (file types, sites, link types) */
+.chips { display: flex; flex-wrap: wrap; gap: 5px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 9px; border-radius: 999px; font-size: 12px;
+  border: 1px solid var(--border); background: var(--panel); color: var(--muted);
+}
+button.chip:hover:not(:disabled) { border-color: var(--accent); background: var(--panel); color: var(--text); }
+.chip[aria-pressed=true] { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+button.chip[aria-pressed=true]:hover { background: var(--accent); color: var(--accent-text); filter: brightness(1.08); }
+.chip.match { box-shadow: 0 0 0 2px var(--warn); }
+.chip .x { border: 0; background: transparent; padding: 0 0 0 2px; color: inherit; opacity: 0.7; font-size: 12px; line-height: 1; }
+.chip .x:hover { opacity: 1; background: transparent; }
+.chip .count { opacity: 0.75; font-variant-numeric: tabular-nums; }
+.chips.editable:empty::before { content: "None"; color: var(--muted); font-size: 12px; }
+
+.tab.capture { max-height: min(62vh, 560px); overflow-y: auto; padding-right: 4px; }
+.capture-tools input[type=search] { flex: 1; }
+.capture-tools select { width: auto; }
+.type-groups { display: flex; flex-direction: column; gap: 6px; }
+.type-group { border: 1px solid var(--border); border-radius: 8px; padding: 7px 10px; display: flex; flex-direction: column; gap: 6px; }
+.type-group header { display: flex; align-items: center; gap: 8px; }
+.type-group header .count { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+.skipped { display: flex; flex-direction: column; gap: 6px; padding: 8px 10px; border: 1px dashed var(--warn); border-radius: 8px; }
+.skipped .subhead { margin: 0; }
+.skipped .chip { gap: 6px; }
+.skipped .chip button { padding: 0 6px; font-size: 11px; border-radius: 999px; }
+input.inline-num { width: 80px; padding: 3px 6px; }
+select.inline-select { width: auto; padding: 3px 6px; }
+
+/* Batch dialog */
+.batch-list { display: flex; flex-direction: column; max-height: min(46vh, 380px); overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; }
+.batch-list label { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 5px 10px; border-bottom: 1px solid var(--border); }
+.batch-list label:last-child { border-bottom: 0; }
+.batch-list label:hover { background: var(--row-hover); }
+.batch-list .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.batch-list .url { display: block; color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.batch-list .ext { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+.batch-foot { align-items: center; }
 
 @media (max-width: 1000px) {
   .c-added { display: none; }

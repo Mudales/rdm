@@ -80,6 +80,7 @@ async fn relays_requests_to_the_app() {
             Request::Add { items, .. } => Response::Added {
                 ids: items.iter().map(|i| i.url.len() as i64).collect(),
             },
+            _ => Response::Ok,
         }
     })
     .await
@@ -114,7 +115,7 @@ async fn relays_requests_to_the_app() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn ping_without_app_reports_not_running_and_never_launches() {
+async fn queries_without_app_report_not_running_and_never_launch() {
     let dir = tempfile::tempdir().unwrap();
     let marker = dir.path().join("launched");
     // If the host tried to launch this "app", the spawn would fail loudly
@@ -122,10 +123,20 @@ async fn ping_without_app_reports_not_running_and_never_launches() {
     let replies = run_host(
         &endpoint_for(&dir),
         &marker.to_string_lossy(),
-        &[Request::Ping],
+        &[
+            Request::Ping,
+            Request::GetCaptureRules,
+            Request::ReportSkipped {
+                extension: "txt".into(),
+            },
+            Request::SetSiteCapture {
+                host: "x.org".into(),
+                capture: false,
+            },
+        ],
     )
     .await;
-    assert_eq!(replies, vec![Response::NotRunning]);
+    assert_eq!(replies, vec![Response::NotRunning; 4]);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -227,6 +238,14 @@ fn installer_writes_and_removes_manifests() {
 
     let elsewhere = Installer::with_home(home.path().into(), PathBuf::from("/other/rdm-host"));
     assert!(elsewhere.status().iter().all(|s| s.installed && !s.current));
+    // Another installation's uninstall leaves this registration alone.
+    for b in Browser::ALL {
+        assert!(matches!(
+            elsewhere.uninstall(b).unwrap(),
+            rdm_host::install::Removal::OtherCopy(_)
+        ));
+    }
+    assert!(installer.status().iter().all(|s| s.installed && s.current));
 
     let chrome = installer.manifest_path(Browser::Chrome);
     if cfg!(target_os = "macos") {
@@ -238,8 +257,9 @@ fn installer_writes_and_removes_manifests() {
     }
 
     for b in Browser::ALL {
-        assert!(installer.uninstall(b).unwrap());
-        assert!(!installer.uninstall(b).unwrap());
+        use rdm_host::install::Removal;
+        assert_eq!(installer.uninstall(b).unwrap(), Removal::Removed);
+        assert_eq!(installer.uninstall(b).unwrap(), Removal::NotInstalled);
     }
     assert!(installer.status().iter().all(|s| !s.installed));
 }
@@ -285,4 +305,27 @@ fn installer_writes_and_removes_manifests_and_registry_keys() {
             .is_err()
     );
     let _ = RegKey::predef(HKEY_CURRENT_USER).delete_subkey_all(&base);
+}
+
+#[test]
+fn relocated_host_records_the_app_to_start() {
+    let dir = tempfile::tempdir().unwrap();
+    let host = dir.path().join("mount").join("rdm-host");
+    std::fs::create_dir_all(host.parent().unwrap()).unwrap();
+    std::fs::write(&host, b"old").unwrap();
+    let stable = dir.path().join("stable");
+    let app = dir.path().join("rdm.AppImage");
+    let copied = rdm_host::install::relocate_host(&host, &stable, &app).unwrap();
+    assert_eq!(copied, stable.join("rdm-host"));
+    std::fs::write(&host, b"new").unwrap();
+    rdm_host::install::relocate_host(&host, &stable, &app).unwrap();
+    assert_eq!(
+        std::fs::read(&copied).unwrap(),
+        b"new",
+        "replaced on re-register"
+    );
+    assert_eq!(
+        std::fs::read_to_string(stable.join(rdm_host::install::APP_PATH_FILE)).unwrap(),
+        app.to_str().unwrap()
+    );
 }

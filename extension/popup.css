@@ -37,3 +37,6 @@ input[type=text] { font: inherit; color: var(--text); background: var(--bg); pad
 .message:empty { display: none; }
 .message.error { color: var(--error); }
 .message.ok { color: var(--ok); }
+button.link { align-self: flex-start; border: 0; background: transparent; padding: 0; color: var(--accent); }
+button.link:hover:not(:disabled) { background: transparent; text-decoration: underline; }
+#tab-file .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }

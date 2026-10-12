@@ -145,6 +145,20 @@ $('#add-links').addEventListener('click', async () => {
   updateCount();
 });
 
+// --- This tab ----------------------------------------------------------------
+
+async function showTabFile() {
+  const file = tab?.id != null ? await send({ type: 'getTabFile', tabId: tab.id, url: tab.url }) : null;
+  $('#tab-file').hidden = !file;
+  if (!file) return;
+  $('#tab-file-name').textContent = file.fileName || file.url;
+  $('#tab-file-name').title = file.url;
+}
+$('#tab-file-send').addEventListener('click', async () => {
+  const reply = await send({ type: 'sendTabFile', tabId: tab.id });
+  report(reply, 'Sent to rdm.');
+});
+
 // --- Settings ----------------------------------------------------------------
 
 const settings = await send({ type: 'getSettings' });
@@ -153,4 +167,41 @@ $('#video-button').checked = settings.showVideoButton;
 $('#capture').addEventListener('change', (e) => send({ type: 'setSettings', settings: { captureDownloads: e.target.checked } }));
 $('#video-button').addEventListener('change', (e) => send({ type: 'setSettings', settings: { showVideoButton: e.target.checked } }));
 
-await Promise.all([checkStatus(), checkPermission(), showMedia(), loadLinks()]);
+let host = '';
+try {
+  host = /^https?:/.test(tab?.url ?? '') ? new URL(tab.url).hostname : '';
+} catch {
+  /* not a web page */
+}
+
+/** Shows the app's capture rules (fetched fresh, or the cached copy). */
+async function showRules() {
+  const rules = await send({ type: 'getRules', fresh: true });
+  if (!rules) return;
+  const n = rules.extensions.length;
+  const parts = [`${n} file type${n === 1 ? '' : 's'}`];
+  if (rules.minSize) parts.push(`larger than ${(rules.minSize / 1e6).toFixed(1).replace(/\.0$/, '')} MB`);
+  if (rules.captureInline) parts.push('also when opened in a tab');
+  $('#types-summary').textContent = `Takes ${parts.join(', ')}.`;
+  if (host) {
+    const excluded = rules.excludedSites.some((s) => host === s || host.endsWith(`.${s}`));
+    $('#site-row').hidden = false;
+    $('#site').checked = !excluded;
+    $('#site-label').textContent = `From ${host}`;
+  }
+}
+$('#site').addEventListener('change', async (e) => {
+  const reply = await send({ type: 'setSiteCapture', host, capture: e.target.checked });
+  if (reply?.type === 'captureRules') message(e.target.checked ? `Downloads from ${host} go to rdm.` : `Downloads from ${host} stay in the browser.`, 'ok');
+  else {
+    e.target.checked = !e.target.checked;
+    report(reply?.type === 'notRunning' ? { type: 'error', message: 'Start rdm to change this.' } : reply, '');
+  }
+});
+$('#choose-types').addEventListener('click', async () => {
+  const reply = await send({ type: 'showApp', view: 'captureSettings' });
+  if (reply?.type === 'error') report(reply, '');
+  else window.close();
+});
+
+await Promise.all([checkStatus(), checkPermission(), showTabFile(), showMedia(), loadLinks(), showRules()]);

@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use rdm_host::APP_ENV;
-use rdm_host::install::{Browser, Installer};
+use rdm_host::install::{Browser, Installer, Removal};
 use rdm_ipc::{Client, Endpoint, Request, Response, read_frame, write_frame};
 use tracing_subscriber::EnvFilter;
 
@@ -106,7 +106,7 @@ async fn relay(request: &Request) -> Response {
     let endpoint = Endpoint::for_current_user();
     let mut client = match Client::connect(&endpoint).await {
         Ok(c) => c,
-        Err(_) if *request == Request::Ping => return Response::NotRunning,
+        Err(_) if !request.launches_app() => return Response::NotRunning,
         Err(_) => match launch_and_connect(&endpoint).await {
             Ok(c) => c,
             Err(e) => return Response::error(format!("{e:#}")),
@@ -142,13 +142,20 @@ async fn launch_and_connect(endpoint: &Endpoint) -> Result<Client> {
     }
 }
 
-/// The app executable: `$RDM_APP`, or `rdm-gui` next to this binary.
+/// The app executable: `$RDM_APP`, the path in an `rdm-app-path` file next
+/// to this binary (a copy made for an AppImage), or `rdm-gui` next to it.
 fn app_path() -> Result<PathBuf> {
     if let Some(p) = std::env::var_os(APP_ENV).filter(|p| !p.is_empty()) {
         return Ok(PathBuf::from(p));
     }
     let exe = std::env::current_exe().context("cannot locate rdm-host")?;
     let dir = exe.parent().context("rdm-host has no parent directory")?;
+    if let Ok(recorded) = std::fs::read_to_string(dir.join(rdm_host::install::APP_PATH_FILE)) {
+        let app = PathBuf::from(recorded.trim());
+        if app.is_file() {
+            return Ok(app);
+        }
+    }
     let names: &[&str] = if cfg!(windows) {
         &["rdm-gui.exe", "rdm.exe"]
     } else {
@@ -253,16 +260,14 @@ fn uninstall(args: &[String]) -> Result<()> {
         browsers = Browser::ALL.to_vec();
     }
     for b in browsers {
-        let removed = installer.uninstall(b)?;
-        println!(
-            "{:<9} {}",
-            b.name(),
-            if removed {
-                "removed"
-            } else {
-                "was not installed"
+        let outcome = match installer.uninstall(b)? {
+            Removal::Removed => "removed".to_owned(),
+            Removal::NotInstalled => "was not installed".to_owned(),
+            Removal::OtherCopy(other) => {
+                format!("kept: registered to another copy ({})", other.display())
             }
-        );
+        };
+        println!("{:<9} {outcome}", b.name());
     }
     Ok(())
 }

@@ -1,5 +1,5 @@
-// Test cases for lib/detect.js, shared by the Node runner (detect.test.mjs,
-// used in CI) and the browser runner (index.html).
+// Test cases for lib/detect.js and lib/capture.js, shared by the Node
+// runner (detect.test.mjs, used in CI) and the browser runner (index.html).
 
 import {
   classifyResponse,
@@ -9,10 +9,15 @@ import {
   fileNameFromUrl,
   filterLinks,
   responseSize,
-  shouldCapture,
+  downloadCandidate,
+  dispositionFileName,
+  fileLinks,
   isSupportedKind,
   DEFAULT_SETTINGS,
 } from '../lib/detect.js';
+import { DEFAULT_RULES, capturesSite, decide, extensionForMime, glob } from '../lib/capture.js';
+// The same cases run against the Rust implementation (rdm-manager).
+import shared from './capture-cases.json' with { type: 'json' };
 
 const h = (pairs) => Object.entries(pairs).map(([name, value]) => ({ name, value }));
 const resp = (url, headers, statusCode = 200) => ({ url, statusCode, responseHeaders: h(headers) });
@@ -83,15 +88,58 @@ export const cases = [
     t.deepEqual(urls({}), []);
   }],
 
-  ['browser downloads are captured by extension only when enabled', (t) => {
+  ['browser downloads are candidates only when enabled and http(s)', (t) => {
     const s = DEFAULT_SETTINGS;
-    t.equal(shouldCapture({ url: 'https://x/setup.exe', filename: '' }, s), true);
-    t.equal(shouldCapture({ url: 'https://x/download?id=4', finalUrl: 'https://cdn/x', filename: '/Users/me/Downloads/report.pdf' }, s), true);
-    t.equal(shouldCapture({ url: 'https://x/page.html', filename: 'page.html' }, s), false);
-    t.equal(shouldCapture({ url: 'blob:https://x/1', filename: 'a.zip' }, s), false);
-    t.equal(shouldCapture({ url: 'data:application/zip;base64,AA', filename: 'a.zip' }, s), false);
-    t.equal(shouldCapture({ url: 'https://x/a.zip', filename: 'a.zip', byExtensionId: 'other' }, s), false);
-    t.equal(shouldCapture({ url: 'https://x/a.zip', filename: 'a.zip' }, { ...s, captureDownloads: false }), false);
+    t.deepEqual(downloadCandidate({ url: 'https://x/setup.exe', filename: '', fileSize: -1, totalBytes: 0 }, s), { url: 'https://x/setup.exe', fileName: null, size: null, mime: null });
+    t.deepEqual(
+      downloadCandidate({ url: 'https://x/download?id=4', finalUrl: 'https://cdn/x', filename: '/Users/me/Downloads/report.pdf', totalBytes: 2048, mime: 'application/pdf' }, s),
+      { url: 'https://cdn/x', fileName: 'report.pdf', size: 2048, mime: 'application/pdf' },
+    );
+    t.equal(downloadCandidate({ url: 'blob:https://x/1', filename: 'a.zip' }, s), null);
+    t.equal(downloadCandidate({ url: 'data:application/zip;base64,AA', filename: 'a.zip' }, s), null);
+    t.equal(downloadCandidate({ url: 'https://x/a.zip', filename: 'a.zip', byExtensionId: 'other' }, s), null);
+    t.equal(downloadCandidate({ url: 'https://x/a.zip', filename: 'a.zip' }, { ...s, captureDownloads: false }), null);
+  }],
+
+  ['Content-Disposition file names', (t) => {
+    t.equal(dispositionFileName('attachment; filename="report 1.pdf"'), 'report 1.pdf');
+    t.equal(dispositionFileName("inline; filename*=UTF-8''%D7%A9%D7%99%D7%AA%D7%95%D7%A3.pdf; filename=\"x.pdf\""), 'שיתוף.pdf');
+    t.equal(dispositionFileName('attachment; filename=../../etc/passwd'), 'passwd');
+    t.equal(dispositionFileName('inline'), '');
+    t.equal(dispositionFileName(undefined), '');
+  }],
+
+  ['"download all links" keeps links to files only', (t) => {
+    const links = [
+      { url: 'https://x.org/a.zip', text: 'A' },
+      { url: 'https://x.org/a.zip#again' },
+      { url: 'https://x.org/about.html' },
+      { url: 'https://x.org/view.php?id=3' },
+      { url: 'https://x.org/docs/' },
+      { url: 'mailto:me@x.org' },
+      { url: 'https://cdn.x.org/b.PDF?sig=1' },
+    ];
+    t.deepEqual(fileLinks(links).map((l) => l.url), ['https://x.org/a.zip', 'https://cdn.x.org/b.PDF?sig=1']);
+  }],
+
+  ['capture rules: shared cases', (t) => {
+    t.deepEqual(DEFAULT_RULES.extensions, shared.defaultExtensions);
+    for (const c of shared.cases) {
+      const got = decide(shared.rules, { url: c.url, fileName: c.fileName ?? null, size: c.size ?? null });
+      t.equal(`${c.url} ${got.decision}`, `${c.url} ${c.expect}`);
+      if ('extension' in c) t.equal(got.extension, c.extension);
+    }
+  }],
+
+  ['capture rules: MIME type names files that have no extension yet', (t) => {
+    t.equal(extensionForMime('application/pdf; charset=binary'), 'pdf');
+    t.equal(extensionForMime('text/html'), '');
+    t.equal(decide(DEFAULT_RULES, { url: 'https://x/get?id=1', mime: 'application/zip' }).decision, 'capture');
+    t.equal(decide(DEFAULT_RULES, { url: 'https://x/get?id=1', mime: 'text/html' }).decision, 'notSelected');
+    t.equal(decide(DEFAULT_RULES, { url: 'https://x/notes.txt' }).decision, 'notSelected');
+    t.ok(glob('a*b*c', 'aXbYc') && !glob('r0*', 'rar') && glob('*', ''));
+    t.equal(capturesSite({ ...DEFAULT_RULES, excludedSites: ['x.org'] }, 'DL.X.org'), false);
+    t.equal(capturesSite({ ...DEFAULT_RULES, excludedSites: ['x.org'] }, 'notx.org'), true);
   }],
 
   ['streams are downloadable', (t) => {

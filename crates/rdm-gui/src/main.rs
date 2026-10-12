@@ -11,6 +11,7 @@ mod clipboard;
 mod commands;
 mod ipc;
 mod tray;
+mod update;
 
 use std::sync::{Arc, Mutex};
 
@@ -30,21 +31,27 @@ const RESYNC: &str = "rdm://resync";
 /// Tells the UI that add requests (from the browser or the clipboard) are
 /// waiting; it fetches them with the `take_pending_adds` command.
 pub(crate) const ADD_REQUEST: &str = "rdm://add-request";
+/// Asks the UI to open a view; the payload is an `rdm_ipc::AppView`.
+pub(crate) const SHOW_VIEW: &str = "rdm://show-view";
 
-/// Add requests waiting for the UI. Kept here rather than sent as event
-/// payloads so that a request arriving before the web UI has loaded (e.g.
-/// the browser just launched the app) is not lost.
+/// Add requests waiting for the UI, each a list of items: one item opens
+/// the Add dialog, several the batch dialog. Kept here rather than sent as
+/// event payloads so that a request arriving before the web UI has loaded
+/// (e.g. the browser just launched the app) is not lost.
 #[derive(Default)]
-pub(crate) struct PendingAdds(pub Mutex<Vec<AddItem>>);
+pub(crate) struct PendingAdds(pub Mutex<Vec<Vec<AddItem>>>);
 
 /// Queues an add request for confirmation in the UI and brings it forward.
-pub(crate) fn request_add(app: &AppHandle, item: AddItem) {
+pub(crate) fn request_add(app: &AppHandle, items: Vec<AddItem>) {
+    if items.is_empty() {
+        return;
+    }
     if let Some(pending) = app.try_state::<PendingAdds>() {
         pending
             .0
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .push(item);
+            .push(items);
     }
     show_main_window(app);
     let _ = app.emit(ADD_REQUEST, ());
@@ -72,6 +79,7 @@ fn run() -> anyhow::Result<()> {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_clipboard_manager::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(PendingAdds::default())
         .setup(|app| {
             let data_dir = app
@@ -93,6 +101,7 @@ fn run() -> anyhow::Result<()> {
             clipboard::spawn(app.handle().clone(), manager.clone());
             app.manage(manager);
             tray::create(app.handle())?;
+            update::spawn_daily_check(app.handle().clone());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -134,6 +143,14 @@ fn run() -> anyhow::Result<()> {
             commands::import_text,
             commands::compute_checksum,
             commands::shutdown_computer,
+            commands::capture_catalog,
+            commands::skipped_types,
+            commands::ignore_skipped,
+            commands::add_batch,
+            update::app_info,
+            update::check_update,
+            update::install_update,
+            update::open_releases_page,
         ])
         .build(tauri::generate_context!())
         .context("failed to start the user interface")?;

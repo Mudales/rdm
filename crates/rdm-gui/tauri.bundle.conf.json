@@ -3,17 +3,13 @@
   "bundle": {
     "externalBin": ["binaries/rdm-host"],
     "targets": ["app", "dmg", "msi", "nsis", "appimage", "deb"],
+    "createUpdaterArtifacts": true,
     "publisher": "rdm contributors",
     "copyright": "© 2026 rdm contributors. MIT License.",
     "homepage": "https://github.com/Mudales/rdm",
     "longDescription": "rdm is a download manager: multi-connection downloads with crash-safe resume, queues and schedules, HLS/DASH streams, and a browser extension.",
     "macOS": {
       "minimumSystemVersion": "11.0"
-    },
-    "linux": {
-      "deb": {
-        "depends": ["libwebkit2gtk-4.1-0", "libayatana-appindicator3-1"]
-      }
     },
     "windows": {
       "nsis": {

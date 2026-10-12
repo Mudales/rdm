@@ -23,6 +23,7 @@
 //! ```
 
 mod antivirus;
+mod capture;
 mod checksum;
 mod error;
 mod manager;
@@ -33,6 +34,9 @@ mod settings;
 mod store;
 mod transfer;
 
+pub use capture::{
+    CaptureDecision, CaptureSettings, FILE_TYPES, FileTypeGroup, SkippedType, default_extensions,
+};
 pub use checksum::{Algorithm, Checksum, hash_file};
 pub use error::{Error, Result, error_chain};
 pub use manager::{FfmpegStatus, Manager};

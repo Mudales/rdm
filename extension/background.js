@@ -1,8 +1,22 @@
 // Background script (MV3 service worker in Chrome/Edge, event page in
-// Firefox). Watches responses for media, captures browser downloads, and
-// talks to the rdm app through the native messaging host.
+// Firefox). Watches responses for media, captures browser downloads (and,
+// when enabled, files that would open in a tab), runs the right-click menu,
+// and talks to the rdm app through the native messaging host.
 
-import { DEFAULT_SETTINGS, classifyResponse, cookieHeader, fileNameFromUrl, shouldCapture } from './lib/detect.js';
+import { DEFAULT_RULES, capturesSite, decide, extensionForMime, hostOf } from './lib/capture.js';
+import {
+  DEFAULT_SETTINGS,
+  classifyResponse,
+  cookieHeader,
+  describe,
+  dispositionFileName,
+  downloadCandidate,
+  fileLinks,
+  fileNameFromUrl,
+  header,
+  isSupportedKind,
+  responseSize,
+} from './lib/detect.js';
 
 const api = globalThis.browser ?? globalThis.chrome;
 const HOST = 'dev.rdm.host';
@@ -10,8 +24,10 @@ const MAX_ITEMS_PER_TAB = 100;
 /** Alt+click on a link lets the browser download it (Chrome's own gesture). */
 const BYPASS_MS = 10_000;
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
 // ---------------------------------------------------------------------------
-// Settings
+// Settings (this browser's switches)
 // ---------------------------------------------------------------------------
 
 async function getSettings() {
@@ -74,6 +90,7 @@ api.webRequest.onHeadersReceived.addListener(
       while (items.size > MAX_ITEMS_PER_TAB) items.delete(items.keys().next().value);
       updateBadge(details.tabId);
       persist();
+      refreshMenusSoon();
     });
   },
   { urls: ['http://*/*', 'https://*/*'] },
@@ -83,8 +100,14 @@ api.webRequest.onHeadersReceived.addListener(
 api.tabs.onUpdated.addListener((tabId, info) => {
   // A new document (not a same-document/history navigation) starts fresh.
   if (info.status === 'loading' && info.url) clearTab(tabId);
+  if (info.url || info.status === 'complete') refreshMenusSoon();
 });
-api.tabs.onRemoved.addListener(clearTab);
+api.tabs.onRemoved.addListener((tabId) => {
+  clearTab(tabId);
+  tabFiles.delete(tabId);
+});
+api.tabs.onActivated.addListener(() => refreshMenusSoon());
+api.windows?.onFocusChanged?.addListener(() => refreshMenusSoon());
 
 async function mediaFor(tabId) {
   await restore();
@@ -137,6 +160,57 @@ async function sendToApp(items, mode, pageUrl) {
   return native({ type: 'add', mode, items: enriched });
 }
 
+/** Shows a failed menu action on the toolbar icon (menus have no UI). */
+function flagError(tabId, reply) {
+  if (reply?.type !== 'error' || tabId == null || tabId < 0) return;
+  api.action.setBadgeText({ tabId, text: '!' }).catch(() => {});
+  api.action.setTitle({ tabId, title: `rdm: ${reply.message}` }).catch(() => {});
+  setTimeout(() => {
+    updateBadge(tabId);
+    api.action.setTitle({ tabId, title: 'rdm' }).catch(() => {});
+  }, 8000);
+}
+
+// ---------------------------------------------------------------------------
+// Capture rules: chosen in the app (Settings → Capture), cached here so a
+// download is never held up when the app is not running.
+// ---------------------------------------------------------------------------
+
+/** Rules younger than this are used without asking the app again. */
+const RULES_FRESH_MS = 30_000;
+/** How long a download waits for the app's answer. */
+const RULES_TIMEOUT_MS = 1500;
+let rulesCache = null; // { rules, fetchedAt }
+
+async function cachedRules() {
+  if (!rulesCache) {
+    const { captureRules } = await api.storage.local.get('captureRules').catch(() => ({}));
+    rulesCache = captureRules?.rules ? captureRules : { rules: DEFAULT_RULES, fetchedAt: 0 };
+  }
+  return rulesCache;
+}
+
+async function storeRules(rules) {
+  rulesCache = { rules: { ...DEFAULT_RULES, ...rules }, fetchedAt: Date.now() };
+  await api.storage.local.set({ captureRules: rulesCache }).catch(() => {});
+  refreshMenusSoon();
+  return rulesCache.rules;
+}
+
+async function getRules({ maxAge = RULES_FRESH_MS } = {}) {
+  const cached = await cachedRules();
+  if (Date.now() - cached.fetchedAt < maxAge) return cached.rules;
+  const reply = await Promise.race([native({ type: 'getCaptureRules' }), sleep(RULES_TIMEOUT_MS).then(() => null)]);
+  if (reply?.type === 'captureRules') return storeRules(reply.rules);
+  return cached.rules;
+}
+
+async function setSiteCapture(host, capture) {
+  const reply = await native({ type: 'setSiteCapture', host, capture });
+  if (reply?.type === 'captureRules') await storeRules(reply.rules);
+  return reply;
+}
+
 // ---------------------------------------------------------------------------
 // Capturing browser downloads
 // ---------------------------------------------------------------------------
@@ -154,14 +228,21 @@ function bypassed(url) {
 api.downloads.onCreated.addListener(async (item) => {
   const url = item.finalUrl || item.url;
   if (reissued.delete(url) || bypassed(url)) return;
-  const settings = await getSettings();
-  if (!shouldCapture(item, settings)) return;
+  const candidate = downloadCandidate(item, await getSettings());
+  if (!candidate) return;
+  const { decision, extension } = decide(await getRules(), candidate);
+  if (decision !== 'capture') {
+    // Offered in rdm's settings as a type to add with one click.
+    if (decision === 'notSelected' && extension) native({ type: 'reportSkipped', extension });
+    return;
+  }
 
   // Stop the browser's copy first; rdm takes it from here.
   await api.downloads.cancel(item.id).catch(() => {});
   await api.downloads.erase({ id: item.id }).catch(() => {});
 
-  const fileName = (item.filename ?? '').split(/[\\/]/).pop() || fileNameFromUrl(url) || undefined;
+  // Without the browser's name, rdm asks the server (Content-Disposition).
+  const fileName = candidate.fileName || undefined;
   const reply = await sendToApp([{ url, fileName, referer: item.referrer }], 'ask', item.referrer);
   if (reply?.type === 'error') {
     // Never lose a download: give it back to the browser.
@@ -172,19 +253,217 @@ api.downloads.onCreated.addListener(async (item) => {
 });
 
 // ---------------------------------------------------------------------------
-// Context menus
+// Files that open in a tab (PDFs, images, videos). Remembered per tab for
+// the popup and the menu; taken over only when the user enabled it in rdm.
 // ---------------------------------------------------------------------------
 
-api.runtime.onInstalled.addListener(async () => {
-  await api.contextMenus.removeAll();
-  api.contextMenus.create({ id: 'rdm-link', title: 'Download link with rdm', contexts: ['link'] });
-  api.contextMenus.create({ id: 'rdm-media', title: 'Download this media with rdm', contexts: ['video', 'audio'] });
-});
+/** tabId -> { url, fileName, mime, size, referer } of a tab that shows a file. */
+const tabFiles = new Map();
+const PAGE_TYPES = /^(text\/html|application\/xhtml\+xml|text\/xml|application\/xml|application\/json|text\/plain)$/;
 
-api.contextMenus.onClicked.addListener((info) => {
-  const url = info.menuItemId === 'rdm-link' ? info.linkUrl : info.srcUrl;
-  if (!/^https?:/i.test(url ?? '')) return; // blob: media is a stream
-  sendToApp([{ url }], 'ask', info.pageUrl);
+api.webRequest.onHeadersReceived.addListener(
+  (details) => {
+    if (details.tabId < 0 || details.statusCode !== 200) return;
+    const mime = (header(details.responseHeaders, 'content-type') ?? '').split(';')[0].trim().toLowerCase();
+    const disposition = header(details.responseHeaders, 'content-disposition') ?? '';
+    // Pages are not files; attachments become downloads (handled above).
+    if (!mime || /^\s*attachment/i.test(disposition)) {
+      tabFiles.delete(details.tabId);
+      return;
+    }
+    const mimeExt = extensionForMime(mime);
+    const fileName = dispositionFileName(disposition) || null;
+    const file = {
+      url: details.url,
+      // The server's name, else one that carries the type (a PDF served
+      // from /view.php is still a PDF).
+      fileName: fileName ?? (mimeExt ? `${fileNameFromUrl(details.url).replace(/\.[^.]*$/, '') || 'file'}.${mimeExt}` : null),
+      mime,
+      size: responseSize(details.responseHeaders),
+      referer: details.initiator ?? details.originUrl ?? undefined,
+    };
+    if (PAGE_TYPES.test(mime) && !fileName) {
+      tabFiles.delete(details.tabId);
+      return;
+    }
+    tabFiles.set(details.tabId, file);
+    refreshMenusSoon();
+    captureInline(details.tabId, file).catch((e) => console.warn('rdm:', e));
+  },
+  { urls: ['http://*/*', 'https://*/*'], types: ['main_frame'] },
+  ['responseHeaders'],
+);
+
+async function captureInline(tabId, file) {
+  if (bypassed(file.url) || !(await getSettings()).captureDownloads) return;
+  const rules = await getRules();
+  if (!rules.captureInline) return;
+  if (decide(rules, file).decision !== 'capture') return;
+  const reply = await sendToApp([{ url: file.url, fileName: file.fileName ?? undefined, referer: file.referer }], 'ask', file.referer);
+  if (reply?.type === 'error') return; // it stays in the tab
+  // Leave the file: back to the page the link was on, or close a tab that
+  // was opened just for it.
+  api.tabs.goBack(tabId).catch(() => api.tabs.remove(tabId).catch(() => {}));
+}
+
+// ---------------------------------------------------------------------------
+// Right-click menu
+// ---------------------------------------------------------------------------
+
+const ALL_CONTEXTS = ['page', 'frame', 'link', 'selection', 'image', 'video', 'audio'];
+const MAX_MENU_MEDIA = 8;
+/** Media listed under "Detected media", in menu order. */
+let menuMedia = [];
+
+/** Calls a contextMenus method, ignoring failures (e.g. an item that is already gone). */
+function menuCall(method, ...args) {
+  try {
+    if (method === 'create') {
+      // create() reports errors through lastError only; read it.
+      api.contextMenus.create(...args, () => void api.runtime.lastError);
+    } else {
+      Promise.resolve(api.contextMenus[method](...args)).catch(() => {});
+    }
+  } catch {
+    /* not available here */
+  }
+}
+
+function setupMenus() {
+  menuCall('removeAll');
+  const add = (props) => menuCall('create', { contexts: ALL_CONTEXTS, ...props });
+  add({ id: 'rdm', title: 'rdm' });
+  add({ id: 'rdm-link', parentId: 'rdm', title: 'Download link with rdm…', contexts: ['link'] });
+  add({ id: 'rdm-link-queue', parentId: 'rdm', title: 'Add link to the queue', contexts: ['link'] });
+  add({ id: 'rdm-selection', parentId: 'rdm', title: 'Download selected links…', contexts: ['selection'] });
+  add({ id: 'rdm-media', parentId: 'rdm', title: 'Download this media…', contexts: ['video', 'audio'] });
+  add({ id: 'rdm-image', parentId: 'rdm', title: 'Download image…', contexts: ['image'] });
+  add({ id: 'rdm-page-file', parentId: 'rdm', title: 'Download this file…', contexts: ['page'], visible: false });
+  add({ id: 'rdm-all-links', parentId: 'rdm', title: 'Download all links on this page…' });
+  add({ id: 'rdm-streams', parentId: 'rdm', title: 'Detected media', visible: false });
+  add({ id: 'rdm-sep', parentId: 'rdm', type: 'separator' });
+  add({ id: 'rdm-site', parentId: 'rdm', type: 'checkbox', checked: true, title: 'Take downloads from this site' });
+  add({ id: 'rdm-types', parentId: 'rdm', title: 'Choose file types…' });
+  add({ id: 'rdm-open', parentId: 'rdm', title: 'Open rdm' });
+  menuMedia = [];
+  refreshMenusSoon();
+}
+api.runtime.onInstalled.addListener(setupMenus);
+api.runtime.onStartup?.addListener(setupMenus);
+
+let refreshTimer = null;
+function refreshMenusSoon() {
+  clearTimeout(refreshTimer);
+  refreshTimer = setTimeout(() => refreshMenus().catch(() => {}), 150);
+}
+
+/** Updates the parts of the menu that depend on the active tab. */
+async function refreshMenus() {
+  const [tab] = await api.tabs.query({ active: true, lastFocusedWindow: true });
+  if (!tab) return;
+  const { rules } = await cachedRules();
+  const host = hostOf(tab.url ?? '');
+  menuCall('update', 'rdm-site', {
+    title: host ? `Take downloads from ${host}` : 'Take downloads from this site',
+    checked: !host || capturesSite(rules, host),
+    enabled: !!host,
+  });
+  const file = tabFiles.get(tab.id);
+  menuCall('update', 'rdm-page-file', { visible: !!file && file.url === tab.url });
+
+  // All slots, not just the last list's: a restarted worker forgets it.
+  for (let i = 0; i < MAX_MENU_MEDIA; i++) menuCall('remove', `rdm-stream-${i}`);
+  menuMedia = (await mediaFor(tab.id)).filter((i) => isSupportedKind(i.kind)).slice(0, MAX_MENU_MEDIA);
+  menuMedia.forEach((item, i) => {
+    const name = item.fileName || fileNameFromUrl(item.url) || item.url;
+    const title = `${describe(item)} — ${name}`;
+    menuCall('create', {
+      id: `rdm-stream-${i}`,
+      parentId: 'rdm-streams',
+      title: title.length > 80 ? `${title.slice(0, 79)}…` : title,
+      contexts: ALL_CONTEXTS,
+    });
+  });
+  menuCall('update', 'rdm-streams', {
+    visible: menuMedia.length > 0,
+    title: `Detected media (${menuMedia.length})`,
+  });
+}
+
+/** Asks a frame's content script for its links. */
+async function collectLinks(tabId, frameId, selectionOnly) {
+  try {
+    const reply = await api.tabs.sendMessage(tabId, { type: 'collectLinks', selectionOnly }, { frameId: frameId ?? 0 });
+    return reply?.links ?? [];
+  } catch {
+    return []; // no content script here (e.g. a browser page)
+  }
+}
+
+function mediaItem(item, tab) {
+  const stream = item.kind === 'hls' || item.kind === 'dash';
+  // Streams are named after the page; their URLs say "master.m3u8".
+  return { url: item.url, kind: item.kind, title: tab?.title, fileName: stream ? undefined : item.fileName };
+}
+
+async function onMenu(info, tab) {
+  const tabId = tab?.id;
+  const pageUrl = info.frameUrl ?? info.pageUrl ?? tab?.url;
+  const id = String(info.menuItemId);
+  if (id.startsWith('rdm-stream-')) {
+    const item = menuMedia[Number(id.slice('rdm-stream-'.length))];
+    return item && sendToApp([mediaItem(item, tab)], 'ask', tab?.url);
+  }
+  switch (id) {
+    case 'rdm-link':
+      return sendToApp([{ url: info.linkUrl }], 'ask', pageUrl);
+    case 'rdm-link-queue':
+      return sendToApp([{ url: info.linkUrl }], 'queue', pageUrl);
+    case 'rdm-image':
+      return sendToApp([{ url: info.srcUrl }], 'ask', pageUrl);
+    case 'rdm-media': {
+      if (/^https?:/i.test(info.srcUrl ?? '')) {
+        return sendToApp([{ url: info.srcUrl, kind: info.mediaType === 'audio' ? 'audio' : 'video', title: tab?.title }], 'ask', pageUrl);
+      }
+      // A blob: player plays a stream; use the one detected on this tab.
+      const best = (await mediaFor(tabId)).find((i) => isSupportedKind(i.kind));
+      if (best) return sendToApp([mediaItem(best, tab)], 'ask', tab?.url);
+      return { type: 'error', message: 'No downloadable stream detected yet. Play the video for a moment and try again.' };
+    }
+    case 'rdm-page-file': {
+      const file = tabFiles.get(tabId);
+      return file && sendToApp([{ url: file.url, fileName: file.fileName ?? undefined, referer: file.referer }], 'ask', file.referer);
+    }
+    case 'rdm-selection':
+    case 'rdm-all-links': {
+      const links = await collectLinks(tabId, info.frameId, id === 'rdm-selection');
+      // A selection is deliberate: keep every link in it. "All links"
+      // keeps the ones that point to files.
+      const chosen = id === 'rdm-selection' ? links.filter((l) => /^https?:/i.test(l.url)) : fileLinks(links);
+      const unique = [...new Map(chosen.map((l) => [l.url.split('#')[0], l])).values()];
+      if (!unique.length) return { type: 'error', message: id === 'rdm-selection' ? 'No links in the selection.' : 'No links to files found on this page.' };
+      return sendToApp(unique.map((l) => ({ url: l.url })), 'ask', pageUrl);
+    }
+    case 'rdm-site': {
+      const host = hostOf(tab?.url ?? '');
+      if (!host) return;
+      const reply = await setSiteCapture(host, info.checked);
+      if (reply?.type !== 'captureRules') refreshMenusSoon(); // put the checkmark back
+      return reply;
+    }
+    case 'rdm-types':
+      return native({ type: 'show', view: 'captureSettings' });
+    case 'rdm-open':
+      return native({ type: 'show' });
+  }
+  return undefined;
+}
+
+api.contextMenus.onClicked.addListener((info, tab) => {
+  onMenu(info, tab).then(
+    (reply) => flagError(tab?.id, reply),
+    (e) => flagError(tab?.id, { type: 'error', message: String(e?.message ?? e) }),
+  );
 });
 
 // ---------------------------------------------------------------------------
@@ -214,6 +493,26 @@ const handlers = {
     const settings = { ...(await getSettings()), ...msg.settings };
     await api.storage.local.set({ settings });
     return settings;
+  },
+  /** The app's rules, refreshed when the popup opens. */
+  async getRules(msg) {
+    return getRules({ maxAge: msg.fresh ? 0 : RULES_FRESH_MS });
+  },
+  async setSiteCapture(msg) {
+    return setSiteCapture(msg.host, msg.capture);
+  },
+  async showApp(msg) {
+    return native({ type: 'show', view: msg.view ?? 'downloads' });
+  },
+  /** The file the tab shows, if it shows one (a PDF, an image…). */
+  async getTabFile(msg) {
+    const file = tabFiles.get(msg.tabId);
+    return file && file.url === msg.url ? file : null;
+  },
+  async sendTabFile(msg) {
+    const file = tabFiles.get(msg.tabId);
+    if (!file) return { type: 'error', message: 'This tab does not show a file.' };
+    return sendToApp([{ url: file.url, fileName: file.fileName ?? undefined, referer: file.referer }], 'ask', file.referer);
   },
 };
 

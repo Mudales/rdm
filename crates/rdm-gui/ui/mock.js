@@ -28,7 +28,34 @@ let settings = {
     ['Other', ''],
   ].map(([name, exts], i) => ({ id: i + 1, name, extensions: exts.split(' ').filter(Boolean), directory: `${home}/${name}` })),
   queues: [{ id: 1, name: 'Main', maxConcurrent: 3, schedule: { enabled: true, start: '01:00', stop: '07:00', days: [1, 2, 3, 4, 5], once: false }, whenDone: 'nothing' }],
+  checkUpdates: true,
+  capture: null, // filled from the catalog below
 };
+
+// Mirrors rdm_manager::FILE_TYPES (abridged is fine for previews).
+const catalog = {
+  groups: [
+    ['video', 'Video', 'mp4 mkv webm avi mov wmv flv m4v mpg mpeg 3gp ogv ts m2ts vob rm rmvb asf'],
+    ['audio', 'Audio', 'mp3 m4a aac flac wav ogg oga opus wma aiff alac mka'],
+    ['archives', 'Archives', 'zip rar 7z tar gz tgz bz2 xz zst lz lzma cab arj'],
+    ['programs', 'Programs', 'exe msi msix msu appx apk aab deb rpm appimage pkg jar flatpak snap'],
+    ['diskImages', 'Disk images', 'iso img dmg vhd vhdx vmdk qcow2'],
+    ['documents', 'Documents', 'pdf epub mobi djvu doc docx xls xlsx ppt pptx odt ods odp rtf csv txt'],
+    ['images', 'Images', 'jpg jpeg png gif webp avif svg bmp tif tiff heic psd'],
+    ['other', 'Other', 'torrent bin dat srt vtt ttf otf'],
+  ].map(([id, name, exts]) => ({ id, name, extensions: exts.split(' ') })),
+  defaults: [],
+};
+catalog.defaults = [
+  ...catalog.groups.filter((g) => ['video', 'audio', 'archives', 'programs', 'diskImages'].includes(g.id)).flatMap((g) => g.extensions),
+  'pdf', 'epub', 'mobi', 'djvu',
+];
+settings.capture = { extensions: [...catalog.defaults, 'r0*'], minSize: null, excludedSites: ['update.microsoft.com'], excludedAddresses: [], captureInline: false };
+let skipped = [
+  { extension: 'txt', count: 12, lastSeen: now() - 3600, ignored: false },
+  { extension: 'json', count: 3, lastSeen: now() - 86400, ignored: false },
+  { extension: 'torrent', count: 1, lastSeen: now() - 7200, ignored: false },
+];
 const running = new Set();
 
 let nextId = 1;
@@ -241,6 +268,35 @@ const commands = {
   show_in_folder: () => {},
   pick_folder: () => `${home}/Picked`,
   take_pending_adds: () => pending.splice(0),
+  capture_catalog: () => structuredClone(catalog),
+  skipped_types: () => skipped.filter((t) => !t.ignored && !settings.capture.extensions.includes(t.extension)),
+  ignore_skipped: ({ extension }) => {
+    skipped = skipped.map((t) => (t.extension === extension ? { ...t, ignored: true } : t));
+  },
+  add_batch: async ({ items, start }) => {
+    await new Promise((r) => setTimeout(r, 400));
+    return items.map((item) => {
+      const name = decodeURIComponent(new URL(item.url).pathname.split('/').pop() || 'file');
+      const r = record(name, 20 * MIB, start === 'now' ? 'downloading' : start === 'queue' ? 'queued' : 'stopped', 0);
+      r.url = item.url;
+      if (start === 'now') startSim(r);
+      event('added', { ...r });
+      return r.id;
+    });
+  },
+  app_info: () => ({ version: '0.2.0', canInstall: true, releasesUrl: 'https://github.com/Mudales/rdm/releases', available: null }),
+  check_update: async () => {
+    await new Promise((r) => setTimeout(r, 700));
+    return { version: '0.2.1', currentVersion: '0.2.0', notes: 'See CHANGELOG.md.\n\n- Faster resume\n- Fixes', date: '2026-10-20' };
+  },
+  install_update: async () => {
+    for (let i = 1; i <= 10; i++) {
+      await new Promise((r) => setTimeout(r, 150));
+      emit('rdm://update-progress', { downloaded: i * 1e6, total: 1e7 });
+    }
+    throw 'mock: installing is not simulated';
+  },
+  open_releases_page: () => {},
   export_list: ({ format }) => `${home}/rdm-downloads.${format === 'json' ? 'json' : 'txt'}`,
   import_list: () => ({ added: 3, duplicates: 1, invalid: [] }),
   import_text: ({ text }) => {
@@ -285,18 +341,34 @@ const browsers = [
 // Simulate the browser extension sending a video a few seconds after load.
 const pending = [];
 setTimeout(() => {
-  pending.push({
-    url: 'https://videos.example.com/hls/master.m3u8',
-    title: 'Rust in 2026 — keynote',
-    referer: 'https://videos.example.com/watch?v=42',
-    userAgent: navigator.userAgent,
-    cookies: 'session=abc123',
-  });
+  pending.push([
+    {
+      url: 'https://videos.example.com/hls/master.m3u8',
+      title: 'Rust in 2026 — keynote',
+      referer: 'https://videos.example.com/watch?v=42',
+      userAgent: navigator.userAgent,
+      cookies: 'session=abc123',
+    },
+  ]);
   emit('rdm://add-request', null);
 }, 3000);
 
-// For poking the UI from the browser console: rdmMock.emit('notice', {message: 'hi'}).
-window.rdmMock = { emit: event };
+/** A "download all links" request, as the extension sends it. */
+function batchRequest() {
+  const page = 'https://files.example.org/releases/';
+  const names = ['rdm-0.2.0.dmg', 'rdm-0.2.0-setup.exe', 'rdm-0.2.0.AppImage', 'Release notes.pdf', 'checksums.txt', 'talk.mp4', 'theme.mp3', 'source.tar.gz', 'logo.png', 'slides.pptx'];
+  pending.push(names.map((n) => ({ url: page + encodeURIComponent(n), pageUrl: page, referer: page })));
+  emit('rdm://add-request', null);
+}
+
+// For poking the UI from the browser console: rdmMock.emit('notice', {message: 'hi'}),
+// rdmMock.batch(), rdmMock.show('captureSettings'), rdmMock.update().
+window.rdmMock = {
+  emit: event,
+  batch: batchRequest,
+  show: (view) => emit('rdm://show-view', view),
+  update: () => emit('rdm://update-available', { version: '0.2.1', currentVersion: '0.2.0', notes: null, date: '2026-10-20' }),
+};
 
 export const backend = {
   async invoke(cmd, args = {}) {

@@ -725,3 +725,58 @@ async fn finishing_queue_reports_its_action() {
     assert!(m.list().iter().all(|r| r.status == Status::Completed));
     assert!(!m.queues()[0].running, "a finished queue stops");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn skipped_file_types_are_remembered_and_offered() {
+    let dir = tempfile::tempdir().unwrap();
+    let m = open(dir.path()).await;
+    m.note_skipped(".TXT").unwrap();
+    m.note_skipped("json").unwrap();
+    m.note_skipped("txt").unwrap();
+    m.note_skipped("zip").unwrap(); // already captured: not offered
+    m.note_skipped("not an ext").unwrap(); // ignored
+    let offered: Vec<_> = m
+        .skipped_types()
+        .into_iter()
+        .map(|s| (s.extension, s.count))
+        .collect();
+    assert_eq!(offered, [("txt".into(), 2), ("json".into(), 1)]);
+
+    // Selecting a type or dismissing it removes the offer.
+    let mut settings = m.settings();
+    settings.capture.extensions.push("txt".into());
+    m.update_settings(settings).unwrap();
+    m.ignore_skipped("json").unwrap();
+    assert!(m.skipped_types().is_empty());
+    m.note_skipped("json").unwrap();
+    assert!(
+        m.skipped_types().is_empty(),
+        "dismissed types stay dismissed"
+    );
+
+    m.note_skipped("srt").unwrap();
+    m.shutdown().await;
+    drop(m);
+    let m = open(dir.path()).await;
+    let offered: Vec<_> = m.skipped_types().into_iter().map(|s| s.extension).collect();
+    assert_eq!(offered, ["srt"], "kept across restarts");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn sites_can_be_excluded_and_restored() {
+    let dir = tempfile::tempdir().unwrap();
+    let m = open(dir.path()).await;
+    let s = m
+        .set_site_capture("https://Example.com/page", false)
+        .unwrap();
+    assert_eq!(s.capture.excluded_sites, ["example.com"]);
+    // Already covered by the parent domain: nothing to add.
+    let s = m.set_site_capture("dl.example.com", false).unwrap();
+    assert_eq!(s.capture.excluded_sites, ["example.com"]);
+    assert!(!s.is_download_url("https://dl.example.com/a.zip"));
+    // Capturing a subdomain again lifts the parent's exclusion.
+    let s = m.set_site_capture("dl.example.com", true).unwrap();
+    assert!(s.capture.excluded_sites.is_empty());
+    assert!(s.is_download_url("https://dl.example.com/a.zip"));
+    assert!(m.set_site_capture("  ", false).is_err());
+}

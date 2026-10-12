@@ -14,15 +14,35 @@ with no build step.
   a closed shadow root, so page CSS and scripts can't touch it. It lists the
   media found on the page. Videos that use encrypted media (EME/DRM) show
   **Protected** instead, and nothing is offered.
-- **Captures browser downloads.** Downloads whose file type is on the list
-  are cancelled in the browser and handed to rdm's Add dialog. Alt+click a
-  link to let the browser download it instead. If rdm can't be reached, the
-  download goes back to the browser, so it's never lost.
+- **Captures browser downloads** by the rules chosen in the app (Settings →
+  Capture): file types, a minimum size, and sites or addresses to leave
+  alone. The extension fetches the rules from rdm and caches them, so a
+  download is never held up when rdm isn't running. Captured downloads are
+  cancelled in the browser and handed to rdm's Add dialog. Alt+click a link
+  to let the browser download it instead. If rdm can't be reached, the
+  download goes back to the browser, so it's never lost. A download the
+  browser keeps because its type isn't selected is reported to rdm, which
+  offers that type in its settings.
+- **Takes files that open in a tab** (PDFs, images, videos), when that
+  option is on in rdm: the file goes to rdm with its cookies and the tab
+  goes back (or closes, if it was opened just for the file). The popup
+  offers **Download with rdm** for a tab showing a file either way.
 - **Downloads all links.** The popup filters a page's links by type (video,
   audio, archives, documents, programs, images), by extra extensions, or to
   the same site only, and adds the selection to rdm's queue.
-- **Adds context menus:** "Download link with rdm" and "Download this media
-  with rdm".
+- **Right-click menu (rdm ▸):**
+  - on a link: *Download link with rdm…*, *Add link to the queue*
+  - on selected text: *Download selected links…*
+  - on an image, video or audio: *Download image… / this media…* (a
+    `blob:` player uses the stream detected on the tab)
+  - on a page: *Download all links on this page…* (the links to files, in
+    rdm's list dialog), *Download this file…* (a tab showing a PDF etc.),
+    *Detected media ▸* (the streams found on the tab)
+  - everywhere: *Take downloads from &lt;site&gt;* (a checkbox that adds or
+    removes the site in rdm's exclusions), *Choose file types…* (opens rdm's
+    Capture settings), *Open rdm*
+  A failed action shows **!** on the toolbar icon, with the reason in its
+  tooltip.
 
 Every request carries the page URL as `Referer`, the browser's
 `User-Agent`, and the cookies for the target URL, because many hosts refuse
@@ -77,9 +97,12 @@ A store listing gets a different ID. Add it with
 
 ## Tests
 
-The logic is kept in [`lib/detect.js`](lib/detect.js), which uses no
-browser APIs: media classification, link filtering and download capture
-rules. Its cases in [`test/cases.mjs`](test/cases.mjs) run under Node:
+The logic is kept in [`lib/detect.js`](lib/detect.js) and
+[`lib/capture.js`](lib/capture.js), which use no browser APIs: media
+classification, link filtering and the capture rules. The rules are also
+implemented in Rust (`rdm-manager`); both run the cases in
+[`test/capture-cases.json`](test/capture-cases.json). The cases in
+[`test/cases.mjs`](test/cases.mjs) run under Node:
 
 ```bash
 node --test extension/test/*.test.mjs

@@ -8,6 +8,7 @@
 | Windows x64 | `rdm_<ver>_x64_en-US.msi`, `rdm_<ver>_x64-setup.exe` (NSIS, per-user install) | `windows-latest` |
 | Linux x64 | `rdm_<ver>_amd64.AppImage`, `rdm_<ver>_amd64.deb` | `ubuntu-22.04`, the oldest supported runner, so the binaries work on older glibc |
 | Browser extension | `rdm-extension-v<ver>.zip` | — |
+| In-app updates | `latest.json`, `rdm.app.tar.gz` (macOS), and a `.sig` signature for each update package | the same jobs |
 | Checksums | `SHA256SUMS` (every asset above) | — |
 
 Every app bundle includes `rdm-host`, the native messaging helper, next to
@@ -34,9 +35,13 @@ it only when the user asks (Settings → Media).
 4. The **Release** workflow
    ([`.github/workflows/release.yml`](../.github/workflows/release.yml))
    builds the three bundles in parallel and uploads them to a **draft**
-   release. It then adds the extension zip and `SHA256SUMS`.
-5. Check the draft (the assets are listed, and the notes are right), then
-   publish it:
+   release, with the signed update packages and `latest.json`. It then adds
+   the extension zip and `SHA256SUMS`, and runs the install scripts against
+   the draft on macOS, Ubuntu 22.04 and Windows (install, check the
+   version, uninstall).
+5. Check the draft (the assets are listed, the notes are right, and the
+   install tests passed), then publish it. Publishing is what makes it the
+   "latest" release the updater and the install scripts look for:
 
    ```bash
    gh release edit v0.1.0 --draft=false
@@ -56,9 +61,46 @@ scripts/build-host-sidecar.sh
 cd crates/rdm-gui && cargo tauri build --config tauri.bundle.conf.json
 ```
 
+## Updates
+
+rdm checks `https://github.com/Mudales/rdm/releases/latest/download/latest.json`
+(Settings → About, and at startup when automatic checks are on). The
+release workflow writes that file and signs every update package with the
+updater key; the app accepts a package only if its signature matches the
+public key in `crates/rdm-gui/tauri.conf.json` and was made for the
+announced version (`requireSignedVersion`). This is separate from Apple and
+Microsoft code signing, so it works for unsigned builds too.
+
+The key pair was made with `cargo tauri signer generate`. The private key
+and its password are repository secrets:
+
+| Secret | Value |
+|---|---|
+| `TAURI_SIGNING_PRIVATE_KEY` | the contents of the private key file |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | its password |
+
+**Keep an offline backup of the private key.** Installed copies of rdm
+trust only this key: if it is lost, they can no longer be updated in-app,
+and users have to install the next version by hand.
+
+What gets updated in place: the macOS app bundle, the Windows per-user
+installation (the update runs the NSIS installer in passive mode), and the
+Linux AppImage. A `.deb` installation is told about the new version and
+links to the release page; install it with apt or `scripts/install.sh`.
+
+## Install scripts
+
+[`scripts/install.sh`](../scripts/install.sh) (macOS, Linux) and
+[`scripts/install.ps1`](../scripts/install.ps1) (Windows) install the
+latest or a given release, verify it against `SHA256SUMS`, and register the
+browser helper. They need the repository to be public, since they download
+without credentials. `--from <dir>` (`-From`) installs from local release
+files, which is how CI tests them.
+
 ## Installing unsigned builds
 
-v0.1.0 is not code-signed, so operating systems warn on first launch.
+The builds are not code-signed, so operating systems warn on first launch
+(the install scripts avoid this on macOS).
 
 - **macOS:** open the `.dmg` and drag rdm to Applications. The first time,
   right-click rdm → **Open** → **Open**. If macOS says the app "is damaged",

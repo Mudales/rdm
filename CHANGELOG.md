@@ -1,5 +1,44 @@
 # Changelog
 
+## v0.2.0 (2026-10-12)
+
+### Choosing what rdm takes from the browser
+- New **Capture** tab in Settings: file types in groups (Video, Audio,
+  Archives, Programs, Disk images, Documents, Images, Other), selected with
+  one click per group or per type, with search, presets and your own
+  extensions (wildcards such as `r0*` work).
+- Types the browser downloaded without rdm are listed with a count and an
+  **Add** button, so the list grows from what you actually download.
+- A minimum file size, sites to leave alone (subdomains included), and
+  address patterns to leave alone.
+- Optional: take PDFs, images and videos that would open in a browser tab.
+- The extension follows these rules (it used to have its own fixed list).
+  Copied links are offered for the same file types.
+
+### Right-click menu
+- rdm ▸ Download link / Add link to the queue / Download selected links /
+  Download image or media / Download all links on this page / Download this
+  file (a tab showing a PDF etc.) / Detected media ▸ / Take downloads from
+  this site / Choose file types / Open rdm.
+- Several links open a new list dialog with checkboxes, a filter and
+  selection by type.
+
+### Install and update
+- Install scripts: `curl … install.sh | sh` for macOS and Linux,
+  `irm … install.ps1 | iex` for Windows. They verify `SHA256SUMS`; they
+  can also uninstall.
+- In-app updates (Settings → About): check now or automatically, then
+  install and restart. Updates are signed, and rdm refuses packages that
+  don't match its key.
+
+### Fixes
+- Downloads that need the browser's login cookies failed with 403 when the
+  server redirected to another path (cookies were scoped to the file's
+  folder instead of the whole site).
+- Linux AppImage: registering the browser helper pointed browsers at a
+  temporary path that disappeared when rdm closed.
+- The `.deb` listed its dependencies twice.
+
 ## v0.1.0 (2026-10-11)
 
 First release. The builds are unsigned; see

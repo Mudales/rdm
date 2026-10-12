@@ -5,6 +5,8 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::capture::CaptureSettings;
+
 /// The queue every download belongs to unless another is chosen. It cannot
 /// be deleted.
 pub const MAIN_QUEUE: u32 = 1;
@@ -33,6 +35,10 @@ pub struct Settings {
     /// `clamscan --no-summary {file}`. `{file}` is replaced by the path
     /// (appended if absent). Run directly, never through a shell.
     pub antivirus: Option<String>,
+    /// Which browser downloads are taken over.
+    pub capture: CaptureSettings,
+    /// Look for a new version at startup and once a day.
+    pub check_updates: bool,
 }
 
 /// Proxy choice. Credentials may be embedded in a custom URL
@@ -159,6 +165,8 @@ impl Settings {
                 when_done: WhenDone::Nothing,
             }],
             antivirus: None,
+            capture: CaptureSettings::default(),
+            check_updates: true,
         }
     }
 
@@ -261,6 +269,7 @@ impl Settings {
         if !ids.contains(&MAIN_QUEUE) {
             return Err("the main queue cannot be removed".into());
         }
+        self.capture = self.capture.validated()?;
         Ok(self)
     }
 
@@ -289,9 +298,9 @@ impl Settings {
             .map_or_else(|| self.default_directory.clone(), |c| c.directory.clone())
     }
 
-    /// Whether `text` is a single http(s) URL whose file extension belongs
-    /// to a category (catch-all categories do not count). Used to decide
-    /// whether a copied link looks like a download.
+    /// Whether `text` is a single http(s) URL to a file type that browser
+    /// downloads are taken over for (and not from an excluded site). Used
+    /// to decide whether a copied link looks like a download.
     pub fn is_download_url(&self, text: &str) -> bool {
         let text = text.trim();
         if text.is_empty() || text.len() > 4096 || text.contains(char::is_whitespace) {
@@ -303,15 +312,10 @@ impl Settings {
         if !matches!(url.scheme(), "http" | "https") {
             return false;
         }
-        let Some(ext) = url
-            .path_segments()
-            .and_then(|mut s| s.next_back())
-            .and_then(|last| Path::new(last).extension())
-            .map(|e| e.to_string_lossy().to_ascii_lowercase())
-        else {
-            return false;
-        };
-        self.categories.iter().any(|c| c.extensions.contains(&ext))
+        matches!(
+            self.capture.decide(url.as_str(), None, None),
+            crate::capture::CaptureDecision::Capture
+        )
     }
 
     pub(crate) fn proxy_config(&self) -> rdm_core::ProxyConfig {

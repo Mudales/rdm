@@ -8,8 +8,9 @@ use std::sync::Arc;
 use rdm_host::install::{Browser, BrowserStatus, Installer};
 use rdm_ipc::AddItem;
 use rdm_manager::{
-    Algorithm, DownloadRecord, ExportFormat, FfmpegStatus, Id, ImportReport, LiveProgress, Manager,
-    NewDownload, ProbeResult, QueueState, Settings, StartMode, error_chain,
+    Algorithm, DownloadRecord, ExportFormat, FILE_TYPES, FfmpegStatus, FileTypeGroup, Id,
+    ImportReport, LiveProgress, Manager, NewDownload, ProbeResult, QueueState, Settings,
+    SkippedType, StartMode, default_extensions, error_chain,
 };
 use tauri::{AppHandle, State};
 
@@ -134,12 +135,54 @@ pub async fn pick_folder(app: AppHandle, start: Option<PathBuf>) -> CmdResult<Op
 
 /// Add requests from the browser or clipboard waiting for confirmation.
 #[tauri::command]
-pub fn take_pending_adds(pending: State<'_, PendingAdds>) -> Vec<AddItem> {
+pub fn take_pending_adds(pending: State<'_, PendingAdds>) -> Vec<Vec<AddItem>> {
     std::mem::take(&mut *pending.0.lock().unwrap_or_else(|e| e.into_inner()))
 }
 
-fn installer() -> CmdResult<Installer> {
-    let host = rdm_host::install::sibling_host_path().map_err(msg)?;
+/// File-type groups for the Capture settings, with the default selection.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CaptureCatalog {
+    groups: &'static [FileTypeGroup],
+    defaults: Vec<String>,
+}
+
+#[tauri::command]
+pub fn capture_catalog() -> CaptureCatalog {
+    CaptureCatalog {
+        groups: FILE_TYPES,
+        defaults: default_extensions(),
+    }
+}
+
+#[tauri::command]
+pub fn skipped_types(manager: Mgr<'_>) -> Vec<SkippedType> {
+    manager.skipped_types()
+}
+
+#[tauri::command]
+pub fn ignore_skipped(manager: Mgr<'_>, extension: String) -> CmdResult<()> {
+    manager.ignore_skipped(&extension).map_err(msg)
+}
+
+/// Adds the links chosen in the batch dialog.
+#[tauri::command]
+pub async fn add_batch(
+    manager: Mgr<'_>,
+    items: Vec<AddItem>,
+    start: StartMode,
+    queue_id: Option<u32>,
+) -> CmdResult<Vec<Id>> {
+    crate::ipc::add_all(manager.inner(), items, start, queue_id)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+fn installer(app: &AppHandle) -> CmdResult<Installer> {
+    use tauri::Manager as _;
+    // An AppImage's own files vanish when it exits; a copy goes here.
+    let stable = app.path().app_data_dir().map_err(msg)?.join("browser-host");
+    let host = rdm_host::install::registrable_host_path(&stable).map_err(msg)?;
     if !host.is_file() {
         return Err(format!(
             "rdm-host was not found next to the app ({}). Reinstall rdm, or build it \
@@ -165,15 +208,18 @@ fn browsers(
 }
 
 #[tauri::command]
-pub fn browser_integration_status() -> CmdResult<Vec<BrowserStatus>> {
-    Ok(installer()?.status())
+pub fn browser_integration_status(app: AppHandle) -> CmdResult<Vec<BrowserStatus>> {
+    Ok(installer(&app)?.status())
 }
 
 /// Registers the native messaging host with one browser, or with every
 /// browser found on this system.
 #[tauri::command]
-pub fn install_browser_integration(browser: Option<String>) -> CmdResult<Vec<BrowserStatus>> {
-    let installer = installer()?;
+pub fn install_browser_integration(
+    app: AppHandle,
+    browser: Option<String>,
+) -> CmdResult<Vec<BrowserStatus>> {
+    let installer = installer(&app)?;
     for b in browsers(browser, &installer, true)? {
         installer.install(b).map_err(msg)?;
     }
@@ -181,8 +227,11 @@ pub fn install_browser_integration(browser: Option<String>) -> CmdResult<Vec<Bro
 }
 
 #[tauri::command]
-pub fn uninstall_browser_integration(browser: Option<String>) -> CmdResult<Vec<BrowserStatus>> {
-    let installer = installer()?;
+pub fn uninstall_browser_integration(
+    app: AppHandle,
+    browser: Option<String>,
+) -> CmdResult<Vec<BrowserStatus>> {
+    let installer = installer(&app)?;
     for b in browsers(browser, &installer, false)? {
         installer.uninstall(b).map_err(msg)?;
     }

@@ -21,12 +21,15 @@
 
   api.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     if (msg?.type !== 'collectLinks') return false;
+    // `selectionOnly`: the links inside the selected text (right-click menu).
+    const selection = msg.selectionOnly ? window.getSelection() : null;
+    const wanted = (node) => !selection || selection.containsNode(node, true);
     const links = [];
     for (const a of document.querySelectorAll('a[href]')) {
-      links.push({ url: a.href, text: (a.textContent ?? '').trim().slice(0, 120) });
+      if (wanted(a)) links.push({ url: a.href, text: (a.textContent ?? '').trim().slice(0, 120) });
     }
     for (const m of document.querySelectorAll('video[src], audio[src], source[src]')) {
-      links.push({ url: m.src, text: '' });
+      if (wanted(m)) links.push({ url: m.src, text: '' });
     }
     sendResponse({ links, pageUrl: location.href, title: document.title });
     return false;

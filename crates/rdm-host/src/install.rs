@@ -269,13 +269,20 @@ impl Installer {
     }
 
     /// Unregisters the host for `browser`. `Ok(false)` if it was not there.
-    pub fn uninstall(&self, browser: Browser) -> Result<bool, Error> {
+    /// Removes this host's registration. A registration that points to
+    /// another copy of `rdm-host` (another installation) is left alone.
+    pub fn uninstall(&self, browser: Browser) -> Result<Removal, Error> {
         let path = self.manifest_path(browser);
-        let existed = match std::fs::remove_file(&path) {
-            Ok(()) => true,
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        match registered_host(&path) {
+            None if !path.exists() => return Ok(Removal::NotInstalled),
+            Some(other) if other != self.host_path => return Ok(Removal::OtherCopy(other)),
+            _ => {}
+        }
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
             Err(e) => return Err(io(&path)(e)),
-        };
+        }
         #[cfg(windows)]
         for key in self.registry_keys(browser) {
             use winreg::RegKey;
@@ -286,7 +293,7 @@ impl Installer {
                 Err(e) => return Err(io(&PathBuf::from(format!(r"HKCU\{key}")))(e)),
             }
         }
-        Ok(existed)
+        Ok(Removal::Removed)
     }
 
     pub fn status(&self) -> Vec<BrowserStatus> {
@@ -294,10 +301,7 @@ impl Installer {
             .into_iter()
             .map(|browser| {
                 let manifest_path = self.manifest_path(browser);
-                let installed_path = std::fs::read(&manifest_path)
-                    .ok()
-                    .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
-                    .and_then(|v| v["path"].as_str().map(PathBuf::from));
+                let installed_path = registered_host(&manifest_path);
                 BrowserStatus {
                     browser,
                     name: browser.name(),
@@ -324,6 +328,23 @@ impl Installer {
     }
 }
 
+/// What [`Installer::uninstall`] did.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Removal {
+    Removed,
+    NotInstalled,
+    /// Registered to another copy of `rdm-host` (path given); kept.
+    OtherCopy(PathBuf),
+}
+
+/// The host executable a manifest points to, if it can be read.
+fn registered_host(manifest: &Path) -> Option<PathBuf> {
+    std::fs::read(manifest)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .and_then(|v| v["path"].as_str().map(PathBuf::from))
+}
+
 /// The `rdm-host` executable next to the current executable (the app and
 /// the host ship in the same folder).
 pub fn sibling_host_path() -> std::io::Result<PathBuf> {
@@ -334,4 +355,37 @@ pub fn sibling_host_path() -> std::io::Result<PathBuf> {
         "rdm-host"
     };
     Ok(exe.with_file_name(name))
+}
+
+/// Written next to a relocated `rdm-host`: the path of the app to start.
+pub const APP_PATH_FILE: &str = "rdm-app-path";
+
+/// The `rdm-host` to register with browsers. Normally the one next to the
+/// app. An AppImage runs from a temporary mount that disappears when it
+/// exits, so `rdm-host` is copied to `stable_dir` with an
+/// [`APP_PATH_FILE`] naming the AppImage (`$APPIMAGE`) to start.
+pub fn registrable_host_path(stable_dir: &Path) -> std::io::Result<PathBuf> {
+    let sibling = sibling_host_path()?;
+    match std::env::var_os("APPIMAGE").filter(|p| !p.is_empty()) {
+        Some(appimage) => relocate_host(&sibling, stable_dir, Path::new(&appimage)),
+        None => Ok(sibling),
+    }
+}
+
+/// Copies `host` into `dir` (atomically replacing an older copy) and records
+/// `app` as the program it starts.
+pub fn relocate_host(host: &Path, dir: &Path, app: &Path) -> std::io::Result<PathBuf> {
+    std::fs::create_dir_all(dir)?;
+    let target = dir.join(host.file_name().unwrap_or_else(|| "rdm-host".as_ref()));
+    let tmp = dir.join(".rdm-host.tmp");
+    std::fs::copy(host, &tmp)?; // keeps the executable bit
+    std::fs::rename(&tmp, &target)?;
+    let app = app.to_str().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "the app path is not UTF-8",
+        )
+    })?;
+    std::fs::write(dir.join(APP_PATH_FILE), app)?;
+    Ok(target)
 }

@@ -38,10 +38,10 @@ pub fn spawn(app: AppHandle, manager: Arc<Manager>) {
             }
             request_add(
                 &app,
-                AddItem {
+                vec![AddItem {
                     url,
                     ..AddItem::default()
-                },
+                }],
             );
         }
     });

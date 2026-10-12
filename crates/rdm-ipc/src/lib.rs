@@ -14,7 +14,7 @@ pub mod protocol;
 pub mod transport;
 
 pub use framing::{MAX_FRAME, read_frame, write_frame};
-pub use protocol::{AddItem, AddMode, PROTOCOL_VERSION, Request, Response};
+pub use protocol::{AddItem, AddMode, AppView, PROTOCOL_VERSION, Request, Response};
 pub use transport::{Client, Endpoint, Server};
 
 /// Errors from the IPC layer.
