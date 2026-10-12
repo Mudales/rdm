@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<link rel="stylesheet" href="shot.css">
+<style>.stage { justify-items: center; } .window iframe { width: 380px; height: 602px; }</style>
+<div class="caption">
+  <img src="../../crates/rdm-gui/icons/icon.png" alt="">
+  <h1>Videos, streams and links, one click away</h1>
+  <p>See the videos and HLS/DASH streams on a page and send them to rdm in the quality you want.</p>
+  <p>Turn rdm on or off per site.</p>
+</div>
+<div class="stage">
+  <div class="window"><iframe id="popup"></iframe></div>
+</div>
+<script type="module">
+  // The real popup, with the extension APIs replaced by sample data.
+  const stub = `<script>
+    const media = [
+      { kind: 'hls', url: 'https://cdn.example.org/talks/rust-2026/master.m3u8', fileName: 'master.m3u8', size: null, contentType: 'application/vnd.apple.mpegurl' },
+      { kind: 'video', url: 'https://cdn.example.org/clips/intro.mp4', fileName: 'intro.mp4', size: 48500000, contentType: 'video/mp4' },
+      { kind: 'audio', url: 'https://cdn.example.org/podcast/episode-42.mp3', fileName: 'episode-42.mp3', size: 31200000, contentType: 'audio/mpeg' },
+    ];
+    const links = Array.from({ length: 16 }, (_, i) => ({ url: 'https://videos.example.org/files/part' + i + (i % 3 ? '.zip' : '.pdf') }));
+    window.chrome = {
+      tabs: { query: async () => [{ id: 1, url: 'https://videos.example.org/talks/rust-2026', title: 'Rust in 2026 — keynote' }], sendMessage: async () => ({ links }) },
+      permissions: { contains: async () => true, request: async () => true },
+      runtime: { sendMessage: async (m) => {
+        const replies = {
+          ping: { type: 'pong', version: '0.2.0', protocol: 1 },
+          getMedia: media,
+          getSettings: { captureDownloads: true, showVideoButton: true },
+          getTabFile: null,
+          getRules: { extensions: Array(68).fill('x'), minSize: null, excludedSites: [], excludedAddresses: [], captureInline: false },
+        };
+        return m.type in replies ? replies[m.type] : { type: 'shown' };
+      } },
+    };
+  <\/script>`;
+  const html = await (await fetch('../../extension/popup.html')).text();
+  const frame = document.querySelector('#popup');
+  frame.srcdoc = html.replace('<head>', `<head><base href="${new URL('../../extension/', location.href)}">${stub}`);
+  frame.addEventListener('load', () => setTimeout(() => {
+    const d = frame.contentDocument;
+    for (const k of ['video', 'archives']) d.querySelector(`#kinds input[value=${k}]`)?.click();
+  }, 300));
+</script>

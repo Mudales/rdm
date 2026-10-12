@@ -1,0 +1,16 @@
+<!doctype html>
+<meta charset="utf-8">
+<link rel="stylesheet" href="shot.css">
+<div class="caption">
+  <img src="../../crates/rdm-gui/icons/icon.png" alt="">
+  <h1>Choose what rdm takes from the browser</h1>
+  <p>Pick file types by group or one by one, add your own, and leave chosen sites alone.</p>
+  <p>Types the browser kept are suggested with one click.</p>
+</div>
+<div class="stage">
+  <div class="window"><div class="bar"><i></i><i></i><i></i></div><iframe id="app" width="800" height="660"></iframe></div>
+</div>
+<script type="module">
+  import { loadApp } from './app-frame.js';
+  loadApp(document.querySelector('#app'), (win) => win.rdmMock.show('captureSettings'));
+</script>

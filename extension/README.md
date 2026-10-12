@@ -62,6 +62,12 @@ The browser starts `rdm-host` (installed next to the app) for each message.
 `rdm-host` relays the message to the running app and starts the app if it
 isn't running.
 
+## Installing from the stores
+
+Store listings (Chrome Web Store for Chrome and Brave, Edge Add-ons,
+Firefox Add-ons) are being prepared; see [store/README.md](../store/README.md).
+Until then, load it as below.
+
 ## Installing for development
 
 1. **Register `rdm-host` with your browsers.** In the app, open Settings →

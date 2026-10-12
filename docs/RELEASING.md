@@ -7,7 +7,7 @@
 | macOS (Apple Silicon + Intel) | `rdm_<ver>_universal.dmg`, `rdm.app.tar.gz` | `macos-latest`, `--target universal-apple-darwin` |
 | Windows x64 | `rdm_<ver>_x64_en-US.msi`, `rdm_<ver>_x64-setup.exe` (NSIS, per-user install) | `windows-latest` |
 | Linux x64 | `rdm_<ver>_amd64.AppImage`, `rdm_<ver>_amd64.deb` | `ubuntu-22.04`, the oldest supported runner, so the binaries work on older glibc |
-| Browser extension | `rdm-extension-v<ver>.zip` | — |
+| Browser extension | `rdm-extension-v<ver>.zip` (load unpacked), `-chromium.zip` (Chrome Web Store, Edge Add-ons), `-firefox.zip` (AMO); see [store/README.md](../store/README.md) | — |
 | In-app updates | `latest.json`, `rdm.app.tar.gz` (macOS), and a `.sig` signature for each update package | the same jobs |
 | Checksums | `SHA256SUMS` (every asset above) | — |
 
@@ -172,15 +172,10 @@ publish a detached GPG signature (`gpg --detach-sign --armor`) of
 
 ## Browser extension stores
 
-The release zip is for *Load unpacked* (Chrome/Edge/Brave) and
-*about:debugging* (Firefox). The `key` in `manifest.json` pins the
-development ID `dacdblamhhaedfahmbcllbpgjejdaddi`, which `rdm-host`
-allows.
-
-- **Chrome Web Store / Edge Add-ons:** remove the `key` field before
-  uploading. The store assigns a new ID. Add that ID to
-  `CHROME_EXTENSION_IDS` in `crates/rdm-host/src/lib.rs` so the installed
-  helper accepts it.
-- **Firefox Add-ons:** submit as is. The `gecko.id` (`rdm@rdm.dev`) is what
-  `rdm-host` allows. Listed add-ons are signed by Mozilla; unsigned ones
-  only load temporarily.
+`rdm-extension-v<ver>.zip` is for *Load unpacked* (Chrome/Edge/Brave) and
+*about:debugging* (Firefox). Its `key` pins the development ID
+`dacdblamhhaedfahmbcllbpgjejdaddi`, which `rdm-host` allows. The store
+packages leave the `key` out; Chrome and Edge assign their own IDs, which
+must be added to `CHROME_EXTENSION_IDS` in `crates/rdm-host/src/lib.rs`.
+Firefox keeps `rdm@rdm.dev`. The full submission guide, listing text and
+images are in [store/](../store/README.md).
