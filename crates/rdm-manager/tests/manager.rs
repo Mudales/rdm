@@ -181,15 +181,17 @@ async fn queue_respects_its_limit_and_drains() {
 #[tokio::test(flavor = "multi_thread")]
 async fn stop_keeps_progress_and_start_resumes() {
     let size = 6 * MIB;
-    let server = mock(size, |c| c.per_connection_rate = Some(2 * MIB)).await;
+    // Slow enough (8 connections × 128 KiB/s) that the stop always lands
+    // mid-download, even on a fast machine.
+    let server = mock(size, |c| c.per_connection_rate = Some(128 * 1024)).await;
     let dir = tempfile::tempdir().unwrap();
     let m = open(dir.path()).await;
 
     let r = m.add(new(&server.url())).await.unwrap();
-    wait_for(&m, r.id, "partly downloaded", |r| r.downloaded >= MIB).await;
+    wait_for(&m, r.id, "partly downloaded", |r| r.downloaded >= MIB / 2).await;
     m.stop(r.id).unwrap();
     let stopped = wait_for(&m, r.id, "stopped", |r| r.status == Status::Stopped).await;
-    assert!(stopped.downloaded >= MIB && stopped.downloaded < size);
+    assert!(stopped.downloaded >= MIB / 2 && stopped.downloaded < size);
 
     server.update(|c| c.per_connection_rate = None);
     m.start(r.id).unwrap();
