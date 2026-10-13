@@ -19,6 +19,7 @@ mod ffmpeg;
 mod hls;
 mod job;
 mod model;
+mod process;
 mod tools;
 mod ytdlp;
 
@@ -31,6 +32,7 @@ pub use job::{
     OutputFormat, Phase,
 };
 pub use model::{AudioTrack, Manifest, StreamKind, Variant};
+pub use process::{background_command, background_std_command};
 pub use tools::{ToolSource, deno_source, install_tool, latest_release, ytdlp_source};
 pub use ytdlp::{DENO_ENV, PlaylistEntry, SiteChoice, SiteInfo, YTDLP_ENV, YtDlp};
 
