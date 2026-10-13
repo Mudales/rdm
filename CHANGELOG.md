@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.0 (2026-10-13)
 
 ### Setup assistant
 - On first start (and from ⋯ → *Set up browser and tools*), rdm offers its

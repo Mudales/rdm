@@ -4,13 +4,14 @@ A cross-platform (macOS, Windows, Linux) download manager written in Rust,
 inspired by Internet Download Manager and
 [ab-download-manager](https://github.com/amir1376/ab-download-manager).
 
-> **Status:** v0.3.1. The download engine (`rdm-core`), the headless `rdm`
+> **Status:** v0.4.0. The download engine (`rdm-core`), the headless `rdm`
 > CLI, the desktop app (`rdm-gui`, backed by `rdm-manager`), browser
 > integration (extension, `rdm-host`, `rdm-ipc`), streaming media
 > (`rdm-media`: HLS/DASH), IDM-style extras (scheduler, import/export,
 > checksums, antivirus hook, duplicate detection, drag-and-drop), file-type
-> capture rules, a right-click menu, install scripts, in-app updates, and
-> videos on web pages through yt-dlp.
+> capture rules, a right-click menu, install scripts, in-app updates,
+> videos on web pages through yt-dlp, and a setup assistant that adds the
+> browser extension, yt-dlp and ffmpeg.
 > See [Roadmap](#roadmap).
 
 ## Install
