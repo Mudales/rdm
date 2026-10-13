@@ -17,6 +17,10 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub enum Request {
     /// Is the app there, and which version?
     Ping,
+    /// The extension introduces itself (when it starts, and when its popup
+    /// opens): answered with [`Response::Pong`], whose `extension` says
+    /// which extension version this app ships, so an older one updates.
+    Hello { extension: ExtensionInfo },
     /// Add one or more downloads.
     Add {
         items: Vec<AddItem>,
@@ -35,6 +39,11 @@ pub enum Request {
         #[serde(default)]
         view: AppView,
     },
+    /// The qualities a video can be downloaded in, for the extension to
+    /// offer on the page: a web page's (read by yt-dlp) or a streaming
+    /// playlist's. Answered with [`Response::Formats`], or
+    /// [`Response::ToolMissing`] when yt-dlp is needed and not installed.
+    Formats { item: Box<AddItem> },
 }
 
 impl Request {
@@ -42,7 +51,10 @@ impl Request {
     /// only query or tweak settings are answered with
     /// [`Response::NotRunning`] instead.
     pub fn launches_app(&self) -> bool {
-        matches!(self, Request::Add { .. } | Request::Show { .. })
+        matches!(
+            self,
+            Request::Add { .. } | Request::Show { .. } | Request::Formats { .. }
+        )
     }
 }
 
@@ -54,6 +66,31 @@ pub enum AppView {
     Downloads,
     /// Settings, on the tab that chooses which downloads are taken over.
     CaptureSettings,
+    /// The setup assistant (browser extension, yt-dlp, ffmpeg).
+    Setup,
+}
+
+/// The extension, as it describes itself in [`Request::Hello`].
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default, rename_all = "camelCase")]
+pub struct ExtensionInfo {
+    /// `manifest.json` version.
+    pub version: String,
+    /// "chrome", "edge", "brave", "chromium", "firefox", or another name.
+    pub browser: Option<String>,
+}
+
+/// One quality in [`Response::Formats`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FormatChoice {
+    /// Sent back as [`AddItem::variant`].
+    pub id: String,
+    /// "1080p60 · H.264 · 258 MB".
+    pub label: String,
+    #[serde(default)]
+    pub audio_only: bool,
+    pub size: Option<u64>,
 }
 
 /// One URL to download, with the browser context servers often require.
@@ -74,6 +111,12 @@ pub struct AddItem {
     pub kind: Option<String>,
     /// The page title, used to name streams.
     pub title: Option<String>,
+    /// A quality already chosen on the page: a [`FormatChoice::id`].
+    pub variant: Option<String>,
+    /// Its label, shown in the app.
+    pub label: Option<String>,
+    /// Output format: "auto", "mp4", "mkv", "m4a" or "mp3".
+    pub format: Option<String>,
 }
 
 /// What the app should do with added items.
@@ -96,6 +139,10 @@ pub enum Response {
     Pong {
         version: String,
         protocol: u32,
+        /// The version of the browser extension this app ships (answering
+        /// [`Request::Hello`]).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        extension: Option<String>,
     },
     /// Items added, in request order.
     Added {
@@ -111,6 +158,17 @@ pub enum Response {
     },
     /// Done; nothing to report.
     Ok,
+    /// The qualities of a video, best first.
+    Formats {
+        /// The video's title, when known.
+        title: Option<String>,
+        choices: Vec<FormatChoice>,
+    },
+    /// A tool the request needs is not installed (`tool`: "yt-dlp").
+    ToolMissing {
+        tool: String,
+        message: String,
+    },
     /// Sent by `rdm-host` for a `ping` when the app is not running (pings
     /// never launch the app; adding a download does).
     NotRunning,
@@ -185,6 +243,71 @@ mod tests {
         assert_eq!(
             serde_json::to_string(&Response::Ok).unwrap(),
             r#"{"type":"ok"}"#
+        );
+    }
+
+    #[test]
+    fn hello_and_formats() {
+        let r: Request = serde_json::from_str(
+            r#"{"type":"hello","extension":{"version":"0.4.0","browser":"edge"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            r,
+            Request::Hello {
+                extension: ExtensionInfo {
+                    version: "0.4.0".into(),
+                    browser: Some("edge".into()),
+                }
+            }
+        );
+        assert!(!r.launches_app());
+        // Older apps answer without the extension version, and newer ones
+        // leave it out of a plain ping's answer.
+        let pong = Response::Pong {
+            version: "0.4.0".into(),
+            protocol: 1,
+            extension: None,
+        };
+        assert_eq!(
+            serde_json::to_string(&pong).unwrap(),
+            r#"{"type":"pong","version":"0.4.0","protocol":1}"#
+        );
+        assert_eq!(
+            serde_json::from_str::<Response>(r#"{"type":"pong","version":"0.3.1","protocol":1}"#)
+                .unwrap(),
+            Response::Pong {
+                version: "0.3.1".into(),
+                protocol: 1,
+                extension: None
+            }
+        );
+
+        let r: Request = serde_json::from_str(
+            r#"{"type":"formats","item":{"url":"https://x/watch?v=1","kind":"page"}}"#,
+        )
+        .unwrap();
+        assert!(r.launches_app());
+        let item: AddItem = serde_json::from_str(
+            r#"{"url":"https://x/watch?v=1","kind":"page","variant":"299+140","format":"mp4"}"#,
+        )
+        .unwrap();
+        assert_eq!(item.variant.as_deref(), Some("299+140"));
+        assert_eq!(item.format.as_deref(), Some("mp4"));
+        assert_eq!(
+            serde_json::to_string(&Response::ToolMissing {
+                tool: "yt-dlp".into(),
+                message: "m".into()
+            })
+            .unwrap(),
+            r#"{"type":"toolMissing","tool":"yt-dlp","message":"m"}"#
+        );
+        let r: Request = serde_json::from_str(r#"{"type":"show","view":"setup"}"#).unwrap();
+        assert_eq!(
+            r,
+            Request::Show {
+                view: AppView::Setup
+            }
         );
     }
 }

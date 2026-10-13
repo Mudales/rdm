@@ -2,13 +2,15 @@
 
 use std::sync::Arc;
 
-use rdm_ipc::{AddItem, AddMode, AppView, Endpoint, PROTOCOL_VERSION, Request, Response, Server};
-use rdm_manager::{Manager, NewDownload, StartMode, StreamChoice, error_chain};
+use rdm_ipc::{
+    AddItem, AddMode, AppView, Endpoint, FormatChoice, PROTOCOL_VERSION, Request, Response, Server,
+};
+use rdm_manager::{Error, Manager, NewDownload, StartMode, StreamChoice, error_chain};
 use tauri::{AppHandle, Emitter};
 use tokio::sync::Semaphore;
 use tokio::task::JoinSet;
 
-use crate::{SHOW_VIEW, request_add, show_main_window};
+use crate::{SHOW_VIEW, extension, request_add, show_main_window};
 
 /// Batch adds probe each URL; this many at once.
 const PARALLEL_ADDS: usize = 6;
@@ -30,7 +32,17 @@ async fn handle(app: &AppHandle, manager: &Arc<Manager>, request: Request) -> Re
         Request::Ping => Response::Pong {
             version: env!("CARGO_PKG_VERSION").into(),
             protocol: PROTOCOL_VERSION,
+            extension: None,
         },
+        Request::Hello { extension } => {
+            extension::note_hello(app, manager, &extension);
+            Response::Pong {
+                version: env!("CARGO_PKG_VERSION").into(),
+                protocol: PROTOCOL_VERSION,
+                extension: Some(extension::bundled_version()),
+            }
+        }
+        Request::Formats { item } => formats(manager, *item).await,
         Request::Add { items, .. } if items.is_empty() => Response::error("nothing to add"),
         // The user confirms: one item opens the prefilled Add dialog,
         // several the batch dialog.
@@ -69,6 +81,64 @@ async fn handle(app: &AppHandle, manager: &Arc<Manager>, request: Request) -> Re
             }
             Response::Shown
         }
+    }
+}
+
+/// The qualities offered on the page: yt-dlp's for a web page, the
+/// playlist's for a stream. A plain file has none (it is downloaded as is).
+async fn formats(manager: &Manager, item: AddItem) -> Response {
+    let new = to_new_download(item, StartMode::Paused);
+    let probe = match manager.probe(&new).await {
+        Ok(p) => p,
+        Err(Error::Media(rdm_media::Error::YtDlpMissing)) => {
+            return Response::ToolMissing {
+                tool: "yt-dlp".into(),
+                message: "yt-dlp is needed to find the video on this page.".into(),
+            };
+        }
+        Err(e) => return Response::error(error_chain(&e)),
+    };
+    if let Some(site) = probe.site {
+        let choices = site
+            .choices
+            .into_iter()
+            .map(|c| FormatChoice {
+                id: c.id,
+                label: c.label,
+                audio_only: c.audio_only,
+                size: c.size,
+            })
+            .collect();
+        return Response::Formats {
+            title: Some(site.title),
+            choices,
+        };
+    }
+    if let Some(stream) = probe.stream {
+        let choices = stream
+            .variants
+            .into_iter()
+            .map(|v| FormatChoice {
+                id: v.id,
+                label: v.label,
+                audio_only: false,
+                size: None,
+            })
+            .collect();
+        return Response::Formats {
+            title: new.title,
+            choices,
+        };
+    }
+    if probe.page {
+        return Response::ToolMissing {
+            tool: "yt-dlp".into(),
+            message: "This is a web page; yt-dlp is needed to find its video.".into(),
+        };
+    }
+    Response::Formats {
+        title: None,
+        choices: Vec::new(),
     }
 }
 
@@ -128,13 +198,23 @@ pub(crate) async fn add_all(
     Ok(added.into_iter().map(|(_, id)| id).collect())
 }
 
-fn to_new_download(item: AddItem, start: StartMode) -> NewDownload {
+pub(crate) fn to_new_download(item: AddItem, start: StartMode) -> NewDownload {
+    // A quality picked on the page, if any.
+    let chosen = StreamChoice {
+        variant: item.variant.filter(|v| !v.is_empty()),
+        label: item.label,
+        format: item
+            .format
+            .and_then(|f| serde_json::from_value(serde_json::Value::String(f)).ok())
+            .unwrap_or_default(),
+        ..StreamChoice::default()
+    };
     let stream = match item.kind.as_deref() {
-        Some("hls" | "dash") => Some(StreamChoice::default()),
+        Some("hls" | "dash") => Some(chosen),
         // A web page whose video yt-dlp finds.
         Some("page") => Some(StreamChoice {
             site: true,
-            ..StreamChoice::default()
+            ..chosen
         }),
         _ => None,
     };

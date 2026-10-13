@@ -14,7 +14,7 @@ use rdm_manager::{
 };
 use tauri::{AppHandle, State};
 
-use crate::PendingAdds;
+use crate::{PendingAdds, extension};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
 
@@ -331,4 +331,143 @@ pub async fn compute_checksum(manager: Mgr<'_>, id: Id, algorithm: String) -> Cm
 pub async fn shutdown_computer(manager: Mgr<'_>) -> CmdResult<()> {
     manager.shutdown().await;
     rdm_manager::shutdown_computer().map_err(|e| format!("could not shut down: {e}"))
+}
+
+// ---------------------------------------------------------------------------
+// Setup assistant: the browser extension, yt-dlp and ffmpeg
+// ---------------------------------------------------------------------------
+
+/// One browser, as the setup assistant shows it.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowserSetup {
+    browser: Browser,
+    name: &'static str,
+    /// The browser seems to be installed.
+    detected: bool,
+    /// The helper (`rdm-host`) is registered with it, for this copy of rdm.
+    registered: bool,
+    /// The folder to load the extension from.
+    folder: PathBuf,
+    /// The address of its extensions page.
+    page: &'static str,
+    /// The last time its extension said hello.
+    seen: Option<extension::SeenExtension>,
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionStatus {
+    /// The extension version this app ships.
+    bundled_version: String,
+    browsers: Vec<BrowserSetup>,
+    /// Extensions seen in other browsers (e.g. Opera, Vivaldi).
+    others: Vec<extension::SeenExtension>,
+    /// The user chose not to see the setup assistant at startup.
+    dismissed: bool,
+}
+
+const SETUP_DISMISSED_KEY: &str = "setup_dismissed";
+
+#[tauri::command]
+pub fn extension_status(app: AppHandle, manager: Mgr<'_>) -> CmdResult<ExtensionStatus> {
+    let root = extension::root(&app)?;
+    // Without rdm-host next to the app (a development build), the browsers
+    // are still listed; registering them reports the problem.
+    let status = match installer(&app) {
+        Ok(i) => i.status(),
+        Err(_) => rdm_host::install::sibling_host_path()
+            .map_err(msg)
+            .and_then(|host| Installer::new(host).map_err(msg))?
+            .status(),
+    };
+    let mut seen = extension::seen(&manager);
+    let browsers = status
+        .into_iter()
+        .map(|s| {
+            let key = s.name.to_ascii_lowercase();
+            let found = seen.iter().position(|x| x.browser == key);
+            BrowserSetup {
+                browser: s.browser,
+                name: s.name,
+                detected: s.detected,
+                registered: s.installed && s.current,
+                folder: extension::folder(&root, extension::Flavor::of(s.browser)),
+                page: extension::extensions_page(s.browser),
+                seen: found.map(|i| seen.remove(i)),
+            }
+        })
+        .collect();
+    Ok(ExtensionStatus {
+        bundled_version: extension::bundled_version(),
+        browsers,
+        others: seen,
+        dismissed: manager.ui_value(SETUP_DISMISSED_KEY).as_deref() == Some("true"),
+    })
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ExtensionSetup {
+    folder: PathBuf,
+    page: &'static str,
+    /// The browser's extensions page was opened.
+    opened: bool,
+}
+
+/// Everything rdm can do to add its extension to `browser`: registers the
+/// helper, writes the extension folder, opens the browser's extensions page
+/// and shows the folder. The user then turns on developer mode and loads the
+/// folder (browsers allow nothing else for extensions outside their stores).
+#[tauri::command]
+pub fn setup_extension(app: AppHandle, browser: String) -> CmdResult<ExtensionSetup> {
+    let browser = Browser::parse(&browser).map_err(msg)?;
+    installer(&app)?.install(browser).map_err(msg)?;
+    let folder = extension::folder(&extension::root(&app)?, extension::Flavor::of(browser));
+    extension::write(&folder, extension::Flavor::of(browser))
+        .map_err(|e| format!("cannot write the extension to {}: {e}", folder.display()))?;
+    let page = extension::extensions_page(browser);
+    let opened = match extension::open_in_browser(browser, page) {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::info!("cannot open {page}: {e}");
+            false
+        }
+    };
+    Ok(ExtensionSetup {
+        folder,
+        page,
+        opened,
+    })
+}
+
+/// Shows the extension folder in the file manager.
+#[tauri::command]
+pub fn reveal_extension_folder(app: AppHandle, browser: String) -> CmdResult<()> {
+    let browser = Browser::parse(&browser).map_err(msg)?;
+    let flavor = extension::Flavor::of(browser);
+    let folder = extension::folder(&extension::root(&app)?, flavor);
+    if extension::installed_version(&folder).is_none() {
+        extension::write(&folder, flavor).map_err(msg)?;
+    }
+    app.opener().reveal_item_in_dir(&folder).map_err(msg)
+}
+
+/// Opens the browser's extensions page again.
+#[tauri::command]
+pub fn open_extensions_page(browser: String) -> CmdResult<()> {
+    let browser = Browser::parse(&browser).map_err(msg)?;
+    extension::open_in_browser(browser, extension::extensions_page(browser))
+        .map_err(|e| format!("could not open {}: {e}", browser.name()))
+}
+
+/// Remembers whether the setup assistant opens at startup.
+#[tauri::command]
+pub fn set_setup_dismissed(manager: Mgr<'_>, dismissed: bool) -> CmdResult<()> {
+    manager
+        .set_ui_value(
+            SETUP_DISMISSED_KEY,
+            if dismissed { "true" } else { "false" },
+        )
+        .map_err(msg)
 }

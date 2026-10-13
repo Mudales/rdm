@@ -19,6 +19,7 @@ async fn echo_server(endpoint: Endpoint) -> Server {
             Request::Ping => Response::Pong {
                 version: "test".into(),
                 protocol: rdm_ipc::PROTOCOL_VERSION,
+                extension: None,
             },
             Request::Add { items, mode } => match mode {
                 AddMode::Ask => Response::Shown,

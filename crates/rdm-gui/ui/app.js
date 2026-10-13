@@ -689,7 +689,29 @@ function openRemove() {
 // Add dialog
 // ---------------------------------------------------------------------------
 
-const add = { probeToken: 0, dirTouched: false, nameTouched: false, stream: null, site: null, title: null };
+const add = { probeToken: 0, dirTouched: false, nameTouched: false, stream: null, site: null, title: null, preselect: null };
+
+/** "More options" stays open or closed as the user last left it. */
+function setAddExpanded(open, remember = true) {
+  $('#add-more').hidden = !open;
+  $('#add-paused').hidden = !open;
+  $('#add-more-toggle').setAttribute('aria-expanded', String(open));
+  if (remember) {
+    try {
+      localStorage.setItem('rdm.addExpanded', open ? '1' : '');
+    } catch {
+      /* not kept */
+    }
+  }
+}
+function addExpandedPreference() {
+  try {
+    return localStorage.getItem('rdm.addExpanded') === '1';
+  } catch {
+    return false;
+  }
+}
+$('#add-more-toggle').addEventListener('click', () => setAddExpanded($('#add-more').hidden));
 
 function fillSelect(select, items, value) {
   select.replaceChildren(...items.map(([v, label]) => h('option', { value: String(v), text: label })));
@@ -704,9 +726,14 @@ function openAdd(prefill = {}) {
   const s = state.settings;
   const url = prefill.url ?? '';
   add.dirTouched = false;
+  add.categoryTouched = false;
   add.nameTouched = !!prefill.fileName;
   add.title = prefill.title ?? null;
+  // A quality already picked on the page (the extension's video button).
+  add.preselect = prefill.variant ? { variant: prefill.variant, format: prefill.format ?? null } : null;
   setAddButtons(true);
+  setAddExpanded(addExpandedPreference(), false);
+  showPageAction(null);
   // The browser asked rdm to find the video on this page.
   add.pageHint = prefill.kind === 'page';
   showStreamOptions(null);
@@ -724,6 +751,7 @@ function openAdd(prefill = {}) {
   fillSelect($('#add-category'), [['', 'Automatic (by extension)'], ...s.categories.map((c) => [c.id, c.name])], '');
   fillSelect($('#add-queue'), state.queues.map((q) => [q.id, q.name]), currentQueue()?.id ?? MAIN_QUEUE);
   $('#add-dir').value = s.defaultDirectory;
+  syncRemember();
   $('#dlg-add').showModal();
   $('#add-url').focus();
   if (url) probe();
@@ -753,7 +781,7 @@ function showStreamOptions(manifest) {
   $('#add-site-note').hidden = true;
   $('#add-stream').hidden = !manifest;
   if (!manifest) return;
-  fillSelect($('#add-variant'), manifest.variants.map((v) => [v.id, v.label]), manifest.variants[0]?.id ?? '');
+  fillSelect($('#add-variant'), manifest.variants.map((v) => [v.id, v.label]), preselected(manifest.variants) ?? manifest.variants[0]?.id ?? '');
   const audio = manifest.audio;
   $('#add-audio').disabled = audio.length === 0;
   fillSelect(
@@ -770,8 +798,16 @@ function showSiteOptions(site) {
   $('#add-stream').hidden = false;
   $('#add-audio-field').hidden = true;
   const best = site.choices.find((c) => !c.audioOnly) ?? site.choices[0];
-  fillSelect($('#add-variant'), site.choices.map((c) => [c.id, c.label]), best?.id ?? '');
+  fillSelect($('#add-variant'), site.choices.map((c) => [c.id, c.label]), preselected(site.choices) ?? best?.id ?? '');
   syncSiteChoice();
+}
+
+/** The quality picked on the page, if this list offers it (and its format). */
+function preselected(options) {
+  const p = add.preselect;
+  if (!p || !options.some((o) => o.id === p.variant)) return null;
+  if (p.format) $('#add-format').value = p.format;
+  return p.variant;
 }
 
 let ffmpegFound = null;
@@ -792,10 +828,105 @@ async function syncSiteChoice() {
   }
   const note = $('#add-site-note');
   note.hidden = ffmpegFound || !(needsMerge || needsConvert);
-  note.textContent = needsMerge
-    ? 'This site sends video and audio separately; ffmpeg merges them. Get it in Settings → Media (the download can start now and is merged later).'
-    : 'Converting the audio needs ffmpeg (Settings → Media).';
+  $('#add-site-note-text').textContent = needsMerge
+    ? 'This site sends video and audio separately; ffmpeg joins them. You can start now: they are joined when ffmpeg is there.'
+    : 'Converting the audio needs ffmpeg.';
+  const btn = $('#add-get-ffmpeg');
+  btn.hidden = true;
+  if (!note.hidden) {
+    try {
+      const f = await backend.invoke('ffmpeg_status');
+      btn.hidden = !f.download;
+      if (f.download) {
+        btn.textContent = `Install ffmpeg (~${f.download.sizeMb} MB)`;
+        btn.title = `A prebuilt ffmpeg from ${f.download.publisher} [${f.download.license}], checked against its published SHA-256.`;
+      }
+    } catch {
+      /* the note says what is missing */
+    }
+  }
 }
+
+$('#add-get-ffmpeg').addEventListener('click', async () => {
+  const btn = $('#add-get-ffmpeg');
+  btn.disabled = true;
+  btn.textContent = 'Installing ffmpeg…';
+  try {
+    await backend.invoke('install_ffmpeg');
+    ffmpegFound = true;
+    $('#add-site-note').hidden = true;
+  } catch (e) {
+    $('#add-error').textContent = errorText(e);
+    btn.textContent = 'Try again';
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/**
+ * Under the URL: a one-click way to the video when the address is a web
+ * page and yt-dlp is missing or turned off. `kind`: null, 'install' or 'enable'.
+ */
+async function showPageAction(kind) {
+  const box = $('#add-page-action');
+  box.hidden = !kind;
+  syncRemember();
+  if (!kind) return;
+  const btn = $('#add-page-btn');
+  if (kind === 'enable') {
+    btn.textContent = 'Look for the video with yt-dlp';
+    $('#add-page-hint').textContent = 'yt-dlp is installed but turned off for web pages.';
+    return;
+  }
+  btn.textContent = 'Install yt-dlp and look for the video';
+  $('#add-page-hint').textContent = '';
+  try {
+    const w = await backend.invoke('web_video_status');
+    const wanted = w.downloads.filter((d) => (d.name === 'Deno' ? !w.deno.path : !w.ytdlp.path));
+    if (!wanted.length) {
+      box.hidden = true;
+      return;
+    }
+    btn.textContent = `Install yt-dlp (~${wanted.reduce((n, d) => n + d.sizeMb, 0)} MB) and look for the video`;
+    $('#add-page-hint').textContent = `From ${wanted.map((d) => d.publisher.replace(/^the /, '')).join(' and ')}, checked against their published SHA-256.`;
+  } catch {
+    /* keep the plain button */
+  }
+}
+
+$('#add-page-btn').addEventListener('click', async () => {
+  const btn = $('#add-page-btn');
+  btn.disabled = true;
+  $('#add-error').textContent = '';
+  try {
+    if (!(await backend.invoke('web_video_status')).ytdlp.path) {
+      btn.textContent = 'Installing yt-dlp…';
+      await backend.invoke('install_web_video');
+    }
+    if (!state.settings.webVideo?.enabled) {
+      state.settings = await backend.invoke('update_settings', { settings: { ...state.settings, webVideo: { ...state.settings.webVideo, enabled: true } } });
+    }
+    showPageAction(null);
+    add.pageHint = true;
+    await probe();
+  } catch (e) {
+    $('#add-error').textContent = errorText(e);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/** Offers to make the chosen folder the category's own (IDM's "remember this path"). */
+function syncRemember() {
+  const c = category(Number($('#add-category').value));
+  const dir = $('#add-dir').value.trim();
+  const row = $('#add-remember-row');
+  // Not while the address is a page with nothing to download yet.
+  row.hidden = !c || !dir || dir === c.directory || !$('#add-page-action').hidden;
+  if (c) $('#add-remember-label').textContent = `Always save ${c.name.toLowerCase()} here`;
+  if (row.hidden) $('#add-remember').checked = false;
+}
+$('#add-dir').addEventListener('input', syncRemember);
 
 function syncExtension() {
   const name = $('#add-name');
@@ -851,7 +982,7 @@ function addRequest(start) {
 }
 
 function setAddButtons(enabled) {
-  for (const b of $$('#dlg-add .actions button:not(#add-cancel)')) b.disabled = !enabled;
+  for (const b of $$('#dlg-add .actions button:not(#add-cancel):not(.expander)')) b.disabled = !enabled;
 }
 
 async function probe() {
@@ -859,12 +990,14 @@ async function probe() {
   if (!url) return;
   const token = ++add.probeToken;
   setAddButtons(true);
-  setProbeInfo('Checking…');
+  setProbeInfo(add.pageHint ? 'Looking for the video on the page…' : 'Checking…');
+  showPageAction(null);
   $('#add-error').textContent = '';
   try {
     const request = addRequest('now');
     if (!add.nameTouched) request.fileName = null;
     if (!add.dirTouched) request.directory = null;
+    if (!add.categoryTouched) request.categoryId = null;
     // A new address is probed afresh (it may be a file, not a page).
     if (request.stream?.site && !add.pageHint) request.stream = null;
     if (add.pageHint) request.stream = { site: true, format: 'auto' };
@@ -875,11 +1008,12 @@ async function probe() {
       return;
     }
     if (!add.nameTouched) $('#add-name').value = p.fileName;
-    if ($('#add-category').value === '' && p.categoryId != null) {
-      // Show which category was picked, but keep "automatic" semantics.
-      $('#add-category').value = String(p.categoryId);
+    if (!add.categoryTouched) {
+      // Show which category was picked (each new address picks again).
+      $('#add-category').value = p.categoryId != null ? String(p.categoryId) : '';
     }
     if (!add.dirTouched) $('#add-dir').value = p.directory;
+    syncRemember();
     if (p.site) showSiteOptions(p.site);
     else showStreamOptions(p.stream ?? null);
     showDuplicate(p.duplicate ?? null);
@@ -894,8 +1028,10 @@ async function probe() {
     }
     if (p.page) {
       // Saving the page's HTML is never what was meant.
-      setProbeInfo('This address is a web page, not a file. To find the video on it, get yt-dlp in Settings → Media (and turn on “look for its video”).');
+      setProbeInfo('This address is a web page, not a file.');
       setAddButtons(false);
+      const installed = await backend.invoke('web_video_status').then((w) => !!w.ytdlp.path).catch(() => false);
+      if (token === add.probeToken) showPageAction(installed ? 'enable' : 'install');
       return;
     }
     if (p.stream) {
@@ -945,14 +1081,17 @@ $('#add-check').addEventListener('click', probe);
 $('#add-name').addEventListener('input', () => (add.nameTouched = true));
 $('#add-dir').addEventListener('input', () => (add.dirTouched = true));
 $('#add-category').addEventListener('change', () => {
+  add.categoryTouched = true;
   const c = category(Number($('#add-category').value));
   if (!add.dirTouched) $('#add-dir').value = c ? c.directory : state.settings.defaultDirectory;
+  syncRemember();
 });
 $('#add-browse').addEventListener('click', async () => {
   const dir = await call('pick_folder', { start: $('#add-dir').value || null });
   if (dir) {
     $('#add-dir').value = dir;
     add.dirTouched = true;
+    syncRemember();
   }
 });
 $('#add-cancel').addEventListener('click', () => $('#dlg-add').close());
@@ -985,6 +1124,7 @@ async function submitAdd(start) {
   for (const b of $$('#dlg-add .actions button')) b.disabled = true;
   $('#add-error').textContent = '';
   try {
+    if ($('#add-remember').checked) await rememberFolder(request);
     const record = await backend.invoke('add_download', { request });
     state.records.set(record.id, record);
     $('#dlg-add').close();
@@ -1003,6 +1143,18 @@ async function submitAdd(start) {
   } finally {
     for (const b of $$('#dlg-add .actions button')) b.disabled = false;
   }
+}
+
+/** Makes the chosen folder the category's (the checkbox under Folder). */
+async function rememberFolder(request) {
+  const id = request.categoryId;
+  if (id == null || !request.directory) return;
+  const settings = structuredClone(state.settings);
+  const c = settings.categories.find((x) => x.id === id);
+  if (!c || c.directory === request.directory) return;
+  c.directory = request.directory;
+  state.settings = await backend.invoke('update_settings', { settings });
+  toast(`${c.name} files now go to ${c.directory}.`);
 }
 
 $('#form-add').addEventListener('submit', (e) => {
@@ -1782,6 +1934,227 @@ $('#form-settings').addEventListener('submit', async (e) => {
 });
 
 // ---------------------------------------------------------------------------
+// Setup assistant: the browser extension, yt-dlp and ffmpeg
+// ---------------------------------------------------------------------------
+
+const setup = { ext: null, web: null, ffmpeg: null, guide: null };
+const strong = (text) => h('strong', { text });
+
+/** What to do in the browser after rdm opened its extensions page. */
+function guideSteps(g) {
+  const open = g.opened
+    ? [`${g.name}'s ${g.browser === 'firefox' ? 'debugging' : 'Extensions'} page is open.`]
+    : [`In ${g.name}, go to `, h('code', { text: g.page }), ' (paste it in the address bar; it is copied when you click ', strong('Copy page address'), ').'];
+  if (g.browser === 'firefox') {
+    return [
+      open,
+      ['Click ', strong('Load Temporary Add-on…'), ' and choose ', h('code', { text: 'manifest.json' }), ' in this folder:'],
+    ];
+  }
+  return [
+    open,
+    ['Turn on ', strong('Developer mode'), g.browser === 'edge' ? ' (in the left pane).' : ' (top right corner).'],
+    ['Click ', strong('Load unpacked'), ' and choose this folder. Its path is already copied: paste it with ', h('kbd', { text: navigator.platform.startsWith('Mac') ? '⌘V' : 'Ctrl+V' }), ' in the folder dialog. Or drag the folder onto the page.'],
+  ];
+}
+
+function renderSetupExtension() {
+  const s = setup.ext;
+  if (!s) return;
+  const shown = s.browsers.some((b) => b.detected) ? s.browsers.filter((b) => b.detected || b.seen) : s.browsers;
+  const connected = s.browsers.some((b) => b.seen) || s.others.length > 0;
+  $('#setup-ext').classList.toggle('done', connected);
+  $('#setup-browsers').replaceChildren(
+    ...shown.map((b) => {
+      let text = 'Not set up';
+      let cls = '';
+      if (b.seen) {
+        const current = b.seen.version === s.bundledVersion;
+        text = current
+          ? `Connected · extension ${b.seen.version}`
+          : `Extension ${b.seen.version} connected; it updates itself to ${s.bundledVersion} when ${b.name} restarts`;
+        cls = current ? 'ok' : 'warn';
+      } else if (b.registered) {
+        text = 'Waiting for the extension';
+      }
+      return h(
+        'div',
+        { class: 'setup-browser' },
+        h('strong', { text: b.name }),
+        h('span', { class: `state ${cls}`, text }),
+        h('button', {
+          type: 'button',
+          class: b.seen ? '' : 'primary',
+          text: b.seen ? 'Set up again' : `Add to ${b.name}`,
+          title: `Registers rdm's helper with ${b.name}, puts the extension in a folder and opens ${b.name}'s extensions page.`,
+          onclick: () => setupBrowser(b),
+        }),
+      );
+    }),
+    ...s.others.map((o) =>
+      h('div', { class: 'setup-browser' }, h('strong', { text: o.browser[0].toUpperCase() + o.browser.slice(1) }), h('span', { class: 'state ok', text: `Connected · extension ${o.version}` }), h('span')),
+    ),
+  );
+  renderSetupGuide();
+}
+
+function renderSetupGuide() {
+  const g = setup.guide;
+  $('#setup-guide').hidden = !g;
+  if (!g) return;
+  $('#setup-guide-steps').replaceChildren(...guideSteps(g).map((parts) => h('li', {}, ...parts)));
+  $('#setup-folder').textContent = g.folder;
+  $('#setup-folder').title = g.folder;
+  $('#setup-copy').textContent = g.opened ? 'Copy path' : 'Copy page address';
+  $('#setup-guide-note').textContent =
+    g.browser === 'firefox'
+      ? 'Firefox removes temporary add-ons when it closes. Until rdm is on addons.mozilla.org, repeat this after restarting Firefox.'
+      : `${g.name} keeps the extension from now on, and rdm updates it when rdm updates.`;
+  const seen = setup.ext?.browsers.find((b) => b.browser === g.browser)?.seen;
+  const done = seen && seen.lastSeen >= g.startedAt;
+  const waiting = $('#setup-waiting');
+  waiting.textContent = done ? `✓ Connected: the rdm extension ${seen.version} is working in ${g.name}.` : `Waiting for the extension to connect from ${g.name}…`;
+  waiting.classList.toggle('ok', !!done);
+}
+
+async function setupBrowser(b) {
+  $('#setup-ext-error').textContent = '';
+  try {
+    const r = await backend.invoke('setup_extension', { browser: b.browser });
+    setup.guide = { browser: b.browser, name: b.name, folder: r.folder, page: r.page, opened: r.opened, startedAt: Math.floor(Date.now() / 1000) - 5 };
+    // The folder dialog takes a pasted path; the page address is pasted in the address bar.
+    navigator.clipboard.writeText(r.opened ? r.folder : r.page).catch(() => {});
+    await refreshSetupExtension();
+  } catch (e) {
+    $('#setup-ext-error').textContent = errorText(e);
+  }
+}
+
+async function refreshSetupExtension() {
+  try {
+    setup.ext = await backend.invoke('extension_status');
+    $('#setup-dismiss').checked = setup.ext.dismissed;
+    renderSetupExtension();
+  } catch (e) {
+    $('#setup-ext-error').textContent = errorText(e);
+  }
+}
+
+$('#setup-copy').addEventListener('click', () => {
+  const g = setup.guide;
+  if (g) copyText(g.opened ? g.folder : g.page);
+});
+$('#setup-reveal').addEventListener('click', () => setup.guide && call('reveal_extension_folder', { browser: setup.guide.browser }));
+
+/** yt-dlp counts as set up when it is there, with Deno where rdm can get it. */
+const webVideoReady = (s) => !!s.ytdlp.path && (!!s.deno.path || !s.downloads.some((d) => d.name === 'Deno'));
+
+function renderSetupTools() {
+  const w = setup.web;
+  if (w) {
+    const ready = webVideoReady(w);
+    const wanted = w.downloads.filter((d) => (d.name === 'Deno' ? !w.deno.path : !w.ytdlp.path));
+    const mb = wanted.reduce((n, d) => n + d.sizeMb, 0);
+    $('#setup-yt').classList.toggle('done', ready);
+    const btn = $('#setup-yt-install');
+    btn.hidden = ready || !wanted.length;
+    btn.textContent = `Install (~${mb} MB)`;
+    const detail = $('#setup-yt-detail');
+    detail.classList.toggle('ok', ready);
+    detail.textContent = ready
+      ? [`yt-dlp ${w.ytdlp.version ?? ''}`.trim(), w.deno.path ? `Deno ${(w.deno.version ?? '').replace(/^deno /, '')}`.trim() : null].filter(Boolean).join(' · ')
+      : wanted.length
+        ? `Downloads ${wanted.map((d) => `${d.name} from ${d.publisher} [${d.license}]`).join(' and ')} into rdm's folder, checked against the SHA-256 each project publishes. rdm keeps yt-dlp up to date.`
+        : 'Install yt-dlp and Deno with your package manager (e.g. pipx install yt-dlp, and deno from deno.com).';
+  }
+  const f = setup.ffmpeg;
+  if (f) {
+    $('#setup-ff').classList.toggle('done', !!f.path);
+    const btn = $('#setup-ff-install');
+    btn.hidden = !!f.path || !f.download;
+    if (f.download) btn.textContent = `Install (~${f.download.sizeMb} MB)`;
+    const detail = $('#setup-ff-detail');
+    detail.classList.toggle('ok', !!f.path);
+    detail.textContent = f.path
+      ? (f.version ?? 'ffmpeg').replace(/ Copyright.*$/, '')
+      : f.download
+        ? `Downloads a prebuilt ffmpeg from ${f.download.publisher} [${f.download.license}], checked against its published SHA-256.`
+        : f.hint;
+  }
+}
+
+async function refreshSetupTools() {
+  const [web, ff] = await Promise.allSettled([backend.invoke('web_video_status'), backend.invoke('ffmpeg_status')]);
+  if (web.status === 'fulfilled') setup.web = web.value;
+  else $('#setup-yt-error').textContent = errorText(web.reason);
+  if (ff.status === 'fulfilled') setup.ffmpeg = ff.value;
+  else $('#setup-ff-error').textContent = errorText(ff.reason);
+  renderSetupTools();
+}
+
+/** Runs an install from the assistant, showing progress on its step. */
+async function setupInstall(step, cmd, done) {
+  const box = $(`#setup-${step}`);
+  const btn = $(`#setup-${step}-install`);
+  const err = $(`#setup-${step}-error`);
+  err.textContent = '';
+  btn.disabled = true;
+  box.classList.add('busy');
+  $(`#setup-${step}-detail`).textContent = 'Downloading and checking…';
+  try {
+    await backend.invoke(cmd);
+    await done?.();
+  } catch (e) {
+    err.textContent = errorText(e);
+  } finally {
+    btn.disabled = false;
+    box.classList.remove('busy');
+    ffmpegFound = null;
+    await refreshSetupTools();
+  }
+}
+
+$('#setup-yt-install').addEventListener('click', () =>
+  setupInstall('yt', 'install_web_video', async () => {
+    // Installing it means wanting it used.
+    if (state.settings && !state.settings.webVideo?.enabled) {
+      state.settings = await backend.invoke('update_settings', { settings: { ...state.settings, webVideo: { ...state.settings.webVideo, enabled: true } } });
+    }
+  }),
+);
+$('#setup-ff-install').addEventListener('click', () => setupInstall('ff', 'install_ffmpeg'));
+$('#setup-dismiss').addEventListener('change', (e) => call('set_setup_dismissed', { dismissed: e.target.checked }));
+$('#form-setup').addEventListener('submit', (e) => {
+  e.preventDefault();
+  $('#dlg-setup').close();
+});
+
+function openSetup() {
+  for (const id of ['#setup-ext-error', '#setup-yt-error', '#setup-ff-error']) $(id).textContent = '';
+  setup.guide = null;
+  renderSetupGuide();
+  if (!$('#dlg-setup').open) $('#dlg-setup').showModal();
+  refreshSetupExtension();
+  refreshSetupTools();
+}
+
+/** At startup: offers the assistant until everything is set up or the user says no. */
+async function maybeOpenSetup() {
+  try {
+    const [ext, web, ff] = await Promise.all([backend.invoke('extension_status'), backend.invoke('web_video_status'), backend.invoke('ffmpeg_status')]);
+    if (ext.dismissed) return;
+    const extDone = ext.browsers.some((b) => b.seen) || ext.others.length > 0;
+    if (extDone && webVideoReady(web) && ff.path) return;
+    if (document.querySelector('dialog[open]')) return;
+    openSetup();
+  } catch {
+    /* the app works without it */
+  }
+}
+
+$('#set-open-setup').addEventListener('click', openSetup);
+
+// ---------------------------------------------------------------------------
 // More menu: import / export
 // ---------------------------------------------------------------------------
 
@@ -1804,6 +2177,8 @@ $('#btn-more').addEventListener('click', (e) => {
   };
   const menu = $('#context');
   menu.replaceChildren(
+    item('Set up browser and tools…', openSetup),
+    h('hr'),
     item('Import list…', async () => reportImport(await call('import_list'))),
     h('hr'),
     item('Export list (rdm JSON)…', () => exportTo('json')),
@@ -1951,8 +2326,12 @@ await backend.listen('rdm://event', handleEvent);
 await backend.listen('rdm://resync', loadAll);
 await backend.listen('rdm://add-request', drainPending);
 await backend.listen('rdm://show-view', (view) => {
-  if (view === 'captureSettings' && !$('#dlg-settings').open) openSettings('capture');
+  if (view === 'setup') openSetup();
+  else if (view === 'captureSettings' && !$('#dlg-settings').open) openSettings('capture');
   else if (view === 'captureSettings') showTab('capture');
+});
+await backend.listen('rdm://extension-seen', () => {
+  if ($('#dlg-setup').open) refreshSetupExtension();
 });
 await backend.listen('rdm://update-available', (info) => showUpdate(info));
 await backend.listen('rdm://update-progress', ({ downloaded, total }) => {
@@ -1963,6 +2342,7 @@ await backend.listen('rdm://update-progress', ({ downloaded, total }) => {
 });
 await loadAll();
 await drainPending();
+maybeOpenSetup();
 backend
   .invoke('app_info')
   .then((info) => {

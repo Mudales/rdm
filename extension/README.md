@@ -20,18 +20,23 @@ with no build step.
   download is never held up when rdm isn't running. Captured downloads are
   cancelled in the browser and handed to rdm's Add dialog. Alt+click a link
   to let the browser download it instead. If rdm can't be reached, the
-  download goes back to the browser, so it's never lost. A download the
+  download goes back to the browser, so it's never lost. Only downloads
+  starting now are taken (browsers also report their history through the
+  same event), never the same address twice within 30 seconds, and a burst
+  of downloads pauses capturing for a minute. A download the
   browser keeps because its type isn't selected is reported to rdm, which
   offers that type in its settings.
 - **Takes files that open in a tab** (PDFs, images, videos), when that
   option is on in rdm: the file goes to rdm with its cookies and the tab
   goes back (or closes, if it was opened just for the file). The popup
   offers **Download with rdm** for a tab showing a file either way.
-- **Finds videos the page hides.** Many players (YouTube, Vimeo, …) never
-  load a plain video file. *Find the video on this page* (in the popup, the
-  video button's menu and the right-click menu) sends the page to rdm,
-  where yt-dlp reads it and rdm downloads the chosen quality. YouTube's
-  internal video pieces are no longer listed as separate videos.
+- **Lists qualities on the page.** Many players (YouTube, Vimeo, …) never
+  load a plain video file. The video button's menu asks rdm (`formats`),
+  where yt-dlp reads the page, and lists its qualities; a detected HLS/DASH
+  stream expands into its own. One click opens rdm's prompt with that
+  quality chosen. *Find the video on this page* (popup, right-click menu)
+  sends the page to rdm's Add dialog. YouTube's internal video pieces are
+  not listed as separate videos.
 - **Downloads all links.** The popup filters a page's links by type (video,
   audio, archives, documents, programs, images), by extra extensions, or to
   the same site only, and adds the selection to rdm's queue.
@@ -67,16 +72,32 @@ The browser starts `rdm-host` (installed next to the app) for each message.
 `rdm-host` relays the message to the running app and starts the app if it
 isn't running.
 
-## Installing from the stores
+## Installing
+
+**From the app (recommended).** rdm ships this extension. Open rdm → ⋯ →
+*Set up browser and tools* (it also opens on first start) and click *Add
+to Chrome* (or Edge, Brave, Chromium, Firefox). rdm registers `rdm-host`,
+writes the extension to a folder in its data directory, opens the
+browser's extensions page and copies the folder's path. In the browser:
+
+- **Chrome / Edge / Brave / Chromium:** turn on *Developer mode*, click
+  *Load unpacked* and paste the path (or drag the folder onto the page).
+- **Firefox:** click *Load Temporary Add-on* and choose `manifest.json` in
+  the folder. Firefox drops temporary add-ons when it closes, until the
+  add-on is signed on addons.mozilla.org.
+
+The assistant shows ✓ when the extension connects. When rdm updates, it
+rewrites that folder and the extension reloads itself (once per version)
+to pick up the new files. The extension tells rdm its version with a
+`hello` message; the popup says when the two don't match.
 
 Store listings (Chrome Web Store for Chrome and Brave, Edge Add-ons,
 Firefox Add-ons) are being prepared; see [store/README.md](../store/README.md).
-Until then, load it as below.
 
 ## Installing for development
 
-1. **Register `rdm-host` with your browsers.** In the app, open Settings →
-   Browser → Register. From a source checkout you can also do it by hand:
+1. **Register `rdm-host` with your browsers.** The setup assistant does it,
+   or from a source checkout:
 
    ```bash
    cargo build -p rdm-host -p rdm-gui
@@ -105,6 +126,9 @@ Until then, load it as below.
 A store listing gets a different ID. Add it with
 `rdm-host install --extension-id <id>` and to `CHROME_EXTENSION_IDS` in
 `crates/rdm-host/src/lib.rs`.
+
+The app embeds the files of this folder (`crates/rdm-gui/src/extension.rs`
+lists them; a test fails when a file is added here and not there).
 
 ## Tests
 

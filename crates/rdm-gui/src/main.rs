@@ -9,6 +9,7 @@
 
 mod clipboard;
 mod commands;
+mod extension;
 mod ipc;
 mod tray;
 mod update;
@@ -99,6 +100,7 @@ fn run() -> anyhow::Result<()> {
                 Err(e) => tracing::warn!("browser integration unavailable: {e}"),
             }
             clipboard::spawn(app.handle().clone(), manager.clone());
+            extension::refresh_installed(app.handle());
             spawn_web_video_updates(manager.clone());
             app.manage(manager);
             tray::create(app.handle())?;
@@ -151,6 +153,11 @@ fn run() -> anyhow::Result<()> {
             commands::web_video_status,
             commands::install_web_video,
             commands::update_web_video,
+            commands::extension_status,
+            commands::setup_extension,
+            commands::reveal_extension_folder,
+            commands::open_extensions_page,
+            commands::set_setup_dismissed,
             update::app_info,
             update::check_update,
             update::install_update,

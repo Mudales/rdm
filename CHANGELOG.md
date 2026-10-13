@@ -1,5 +1,47 @@
 # Changelog
 
+## v0.4.0 (2026-10-13)
+
+### Setup assistant
+- On first start (and from ⋯ → *Set up browser and tools*), rdm offers its
+  three add-ons, each installed only when its button is clicked:
+  - **Browser extension.** *Add to Chrome* (Edge, Brave, Chromium,
+    Firefox) registers the helper, writes the extension (shipped inside
+    rdm) to a folder, opens the browser's extensions page, copies the
+    folder's path and lists the two clicks left. It turns green as soon as
+    the extension connects.
+  - **yt-dlp and Deno**, and **ffmpeg**, with their sources and licenses.
+  - *Don't show this when rdm starts* turns the startup offer off.
+- The extension tells rdm its version. rdm rewrites the extension folder
+  when rdm updates, and the extension reloads itself once to pick the new
+  version up; the popup explains when it cannot (loaded from elsewhere,
+  or an older rdm).
+
+### Videos on web pages
+- The video Download button lists the video's qualities itself: yt-dlp
+  reads the page as soon as the menu opens (when the page loaded no plain
+  video file), and an HLS/DASH stream expands into its qualities. One click
+  opens rdm's prompt with that quality chosen; rdm reuses yt-dlp's reading
+  of the page instead of running it again.
+- Without yt-dlp, the menu (and the Add dialog) offer to install it in one
+  click, then look for the video.
+
+### Add dialog
+- Shorter: URL, quality, name and folder, with *Start download* and
+  *Download later*. *More options* (remembered) has the category, queue,
+  connections, speed limit, referer, cookies and checksum.
+- *Always save … here* makes the chosen folder the category's.
+- *Install ffmpeg* right where a video needs it.
+- A second address in the same dialog picks its own category again.
+
+### Fixes
+- The extension sent old downloads from the browser's history to rdm (or
+  back to the browser) one after another, e.g. every installer the user
+  had ever downloaded. Browsers report their history through the same
+  event as new downloads; only downloads starting now are taken, and an
+  address is never taken twice within 30 seconds or in an implausible
+  burst.
+
 ## v0.3.1 (2026-10-12)
 
 ### Fixes

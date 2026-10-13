@@ -100,7 +100,7 @@
         .close:hover { opacity: 1; }
         .close svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2.6; stroke-linecap: round; }
         .menu {
-          position: fixed; display: none; min-width: 280px; max-width: 420px; max-height: 320px; overflow: auto;
+          position: fixed; display: none; min-width: 280px; max-width: 420px; max-height: min(420px, 70vh); overflow: auto;
           padding: 6px; border-radius: 10px; background: #1f2430; color: #e6e9ef;
           box-shadow: 0 10px 30px rgba(0, 0, 0, 0.45);
         }
@@ -112,6 +112,14 @@
         .item .meta { display: block; font-size: 12px; color: #98a2b3; }
         .note { padding: 8px; color: #98a2b3; }
         .note.error { color: #f87171; }
+        .note.busy::before {
+          content: ""; display: inline-block; width: 10px; height: 10px; margin-right: 8px; vertical-align: -1px;
+          border: 2px solid #4f8cff; border-top-color: transparent; border-radius: 50%; animation: spin .9s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .title { padding: 2px 8px 4px; color: #98a2b3; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .item .meta:empty { display: none; }
+        .sub:not(:empty) { margin: 0 0 4px 10px; padding-left: 6px; border-left: 2px solid #2b3445; }
       </style>
       <div class="bar">
         <button class="btn" part="button" type="button">
@@ -210,72 +218,134 @@
     return e;
   }
 
+  /** Qualities already read, per address (yt-dlp takes a few seconds). */
+  const formatsCache = new Map();
+
+  function formatsOf(item) {
+    const key = `${item.kind}:${item.url}`;
+    if (!formatsCache.has(key)) {
+      const pending = send({ type: 'formats', item, pageUrl: location.href }).then((reply) => {
+        // Errors are not kept: the next try may work (rdm started, yt-dlp installed).
+        if (reply?.type !== 'formats') formatsCache.delete(key);
+        return reply;
+      });
+      formatsCache.set(key, pending);
+    }
+    return formatsCache.get(key);
+  }
+
+  function itemButton(name, meta, onClick) {
+    const btn = el('button', 'item');
+    btn.type = 'button';
+    btn.append(el('span', 'name', name), el('span', 'meta', meta));
+    btn.addEventListener('click', async () => {
+      btn.disabled = true;
+      const reply = await onClick();
+      btn.disabled = false;
+      // `undefined`: the click only expanded something.
+      if (reply === undefined) return;
+      if (!reply || reply.type === 'error') showError(reply?.message);
+      else closeMenu();
+    });
+    return btn;
+  }
+
+  function showError(message) {
+    ui.menu.append(el('div', 'note error', message || 'rdm could not be reached.'));
+    place();
+  }
+
+  /** Sends one item to rdm, which asks where to save it. */
+  const sendItem = (item) => send({ type: 'send', items: [item], mode: 'ask' });
+
+  /**
+   * Lists the qualities of `item` (a page or a stream) in `box`: one click
+   * picks one and opens rdm's download prompt with it.
+   */
+  async function showFormats(box, item) {
+    box.replaceChildren(el('div', 'note busy', item.kind === 'page' ? 'Finding the qualities…' : 'Reading the stream…'));
+    const reply = await formatsOf(item);
+    if (reply?.type === 'formats' && reply.choices.length) {
+      box.replaceChildren(
+        ...(item.kind === 'page' && reply.title ? [el('div', 'title', reply.title)] : []),
+        ...reply.choices.map((c) =>
+          itemButton(c.label, c.audioOnly ? 'Audio only' : '', () =>
+            sendItem({ ...item, title: reply.title || item.title, variant: c.id, label: c.label }),
+          ),
+        ),
+      );
+    } else if (reply?.type === 'toolMissing') {
+      box.replaceChildren(
+        el('div', 'note', `${reply.message} rdm can install it for you.`),
+        itemButton(`Install ${reply.tool} in rdm…`, 'Opens rdm’s setup', () => send({ type: 'showApp', view: 'setup' })),
+      );
+    } else if (reply?.type === 'formats' && item.kind !== 'page') {
+      box.replaceChildren(itemButton('Download', 'This stream has one quality', () => sendItem(item)));
+    } else if (reply?.type === 'formats') {
+      box.replaceChildren(el('div', 'note', 'No video was found on this page.'));
+    } else {
+      const message = reply?.type === 'error' ? reply.message : 'rdm could not be reached.';
+      box.replaceChildren(
+        el('div', 'note error', /bad message/i.test(message) ? 'Update rdm to list qualities here.' : message),
+        // rdm can still try in its own window.
+        itemButton('Open in rdm', 'rdm reads the page itself', () => sendItem(item)),
+      );
+    }
+    place();
+  }
+
   async function openMenu() {
     menuOpen = true;
-    ui.menu.replaceChildren(el('div', 'note', 'Looking for media…'));
+    ui.menu.replaceChildren(el('div', 'note busy', 'Looking for media…'));
     ui.menu.style.display = 'block';
 
-    const detected = (await send({ type: 'getMedia' })) ?? [];
+    const detected = ((await send({ type: 'getMedia' })) ?? []).filter((i) => ['video', 'audio', 'hls', 'dash'].includes(i.kind));
     const own = current?.currentSrc;
     const items = [...detected];
     if (own && /^https?:/i.test(own) && !items.some((i) => i.url === own)) {
       items.unshift({ kind: 'video', url: own, fileName: own.split('/').pop()?.split('?')[0] ?? '' });
     }
+    const files = items.filter((i) => i.kind === 'video' || i.kind === 'audio');
+    const streams = items.filter((i) => i.kind === 'hls' || i.kind === 'dash');
 
     const nodes = [el('h4', null, 'Download with rdm')];
-    if (!items.length) {
-      nodes.push(el('div', 'note', 'Nothing found in what the page loaded. yt-dlp can look for the video:'));
-    }
-    for (const item of items) {
-      const supported = ['video', 'audio', 'hls', 'dash'].includes(item.kind);
-      const btn = el('button', 'item');
-      btn.type = 'button';
-      btn.disabled = !supported;
-      btn.append(
-        el('span', 'name', item.fileName || item.url),
-        el(
-          'span',
-          'meta',
-          supported
-            ? [labelFor(item.kind), sizeText(item.size)].filter(Boolean).join(' · ')
-            : labelFor(item.kind),
+    for (const item of files) {
+      nodes.push(
+        itemButton(item.fileName || item.url, [labelFor(item.kind), sizeText(item.size)].filter(Boolean).join(' · '), () =>
+          sendItem({ url: item.url, kind: item.kind, title: document.title, fileName: item.fileName }),
         ),
       );
-      btn.addEventListener('click', async () => {
-        btn.disabled = true;
-        // Streams are named after the page; their URLs say "master.m3u8".
-        const stream = item.kind === 'hls' || item.kind === 'dash';
-        const reply = await send({
-          type: 'send',
-          items: [{ url: item.url, kind: item.kind, title: document.title, fileName: stream ? undefined : item.fileName }],
-          mode: 'ask',
-        });
-        if (reply?.type === 'error') {
-          ui.menu.replaceChildren(el('div', 'note error', reply.message));
-        } else {
-          closeMenu();
-        }
-      });
-      nodes.push(btn);
     }
-    // yt-dlp reads the page itself (YouTube, Vimeo and many more).
-    const find = el('button', 'item');
-    find.type = 'button';
-    find.append(
-      el('span', 'name', 'Find the video on this page'),
-      el('span', 'meta', 'yt-dlp reads the page and offers its qualities'),
-    );
-    find.addEventListener('click', async () => {
-      find.disabled = true;
-      const reply = await send({
-        type: 'send',
-        items: [{ url: location.href, kind: 'page', title: document.title }],
-        mode: 'ask',
+    for (const item of streams) {
+      // Streams are named after the page; their URLs say "master.m3u8".
+      const stream = { url: item.url, kind: item.kind, title: document.title };
+      const box = el('div', 'sub');
+      const btn = itemButton(item.fileName || item.url, `${labelFor(item.kind)} · choose a quality`, async () => {
+        await showFormats(box, stream);
+        return undefined; // keep the menu open
       });
-      if (reply?.type === 'error') ui.menu.replaceChildren(el('div', 'note error', reply.message));
-      else closeMenu();
-    });
-    nodes.push(find);
+      nodes.push(btn, box);
+    }
+
+    // The page's own video, as yt-dlp reads it (YouTube, Vimeo, …). Listed
+    // right away when the page loaded no plain video file; otherwise one
+    // click away.
+    if (/^https?:/i.test(location.href)) {
+      const page = { url: location.href, kind: 'page', title: document.title };
+      const box = el('div', 'sub');
+      if (files.length || streams.length) {
+        nodes.push(
+          el('h4', null, 'More qualities'),
+          itemButton('Find all qualities on this page', 'yt-dlp reads the page', async () => {
+            await showFormats(box, page);
+            return undefined;
+          }),
+        );
+      } else {
+        showFormats(box, page);
+      }
+      nodes.push(box);
+    }
     ui.menu.replaceChildren(...nodes);
     place();
   }

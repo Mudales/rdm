@@ -129,14 +129,26 @@ export function filterLinks(links, { kinds = [], extensions = [], sameHost = fal
   return out;
 }
 
+/** A download that started longer ago than this is not a new one. */
+export const FRESH_DOWNLOAD_MS = 60_000;
+
 /**
  * A browser download rdm could take, before the app's capture rules apply:
  * `{ url, fileName, size, mime }`, or null when capturing is off, another
  * extension started it, or it is not http(s) (blob:, data:, file:).
  * `item` is a downloads.DownloadItem.
+ *
+ * Only a download that is starting now is taken. Chrome also reports the
+ * downloads in its history through `onCreated` when it loads them (at
+ * startup, or when the extension is reloaded); those are finished or
+ * interrupted, or started long ago, and taking them would send every
+ * installer the user ever downloaded to rdm, one after another.
  */
-export function downloadCandidate(item, settings) {
+export function downloadCandidate(item, settings, now = Date.now()) {
   if (!settings.captureDownloads || item.byExtensionId) return null;
+  if (item.state != null && item.state !== 'in_progress') return null;
+  const started = Date.parse(item.startTime ?? '');
+  if (Number.isFinite(started) && now - started > FRESH_DOWNLOAD_MS) return null;
   const url = item.finalUrl || item.url;
   if (!isHttp(url)) return null;
   const fileName = (item.filename ?? '').split(/[\\/]/).pop() || null;
@@ -203,4 +215,31 @@ export function fileLinks(links) {
     out.push({ url, text: link.text ?? '' });
   }
   return out;
+}
+
+/** Compares dotted versions ("0.10.1" > "0.9.3"): negative, 0 or positive. */
+export function compareVersions(a, b) {
+  const pa = String(a ?? '').split('.').map((n) => parseInt(n, 10) || 0);
+  const pb = String(b ?? '').split('.').map((n) => parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d) return d;
+  }
+  return 0;
+}
+
+/**
+ * Which browser this is, for the app's setup screen: "firefox", "edge",
+ * "brave", "opera", "chrome" or "chromium". `nav` is `navigator`.
+ */
+export function browserName(nav, isFirefox = false) {
+  if (isFirefox) return 'firefox';
+  if (nav?.brave) return 'brave';
+  const ua = nav?.userAgent ?? '';
+  const brands = (nav?.userAgentData?.brands ?? []).map((b) => b.brand);
+  if (brands.some((b) => /edge/i.test(b)) || /\bEdg\//.test(ua)) return 'edge';
+  if (brands.includes('Opera') || /\bOPR\//.test(ua)) return 'opera';
+  if (brands.includes('Google Chrome')) return 'chrome';
+  if (brands.includes('Chromium')) return 'chromium';
+  return 'chrome';
 }

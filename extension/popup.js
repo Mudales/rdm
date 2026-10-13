@@ -38,6 +38,15 @@ async function checkStatus() {
   if (reply?.type === 'pong') {
     s.textContent = `Connected to rdm ${reply.version}`;
     s.className = 'status ok';
+    const own = api.runtime.getManifest().version;
+    if (reply.update === 'app') {
+      message(`This extension (${own}) is newer than rdm ${reply.version}. Update rdm (Settings → About) so they work well together.`);
+    } else if (reply.update === 'extension') {
+      message(
+        `rdm ${reply.version} comes with extension ${reply.extension}, but this one is ${own}. ` +
+          'In rdm, open ⋯ → Set up browser and tools, and load the extension from the folder it shows.',
+      );
+    }
   } else if (reply?.type === 'notRunning') {
     s.textContent = 'rdm will start when needed';
     s.className = 'status';

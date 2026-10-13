@@ -192,7 +192,12 @@ const commands = {
     return structuredClone(settings);
   },
   probe_url: async ({ request }) => {
-    if (/youtube\.com|youtu\.be|vimeo\.com/.test(request.url)) {
+    // A web page, with yt-dlp missing or turned off: nothing to download yet.
+    if (/\/watch|\.html$/.test(request.url) && !/youtube/.test(request.url) && !(webVideo.ytdlp.path && settings.webVideo.enabled)) {
+      await delay(300);
+      return { url: request.url, finalUrl: request.url, fileName: 'watch.html', size: null, resumable: false, contentType: 'text/html', categoryId: 6, directory: home, stream: null, site: null, page: true, duplicate: null, serverChecksum: null };
+    }
+    if (/youtube\.com|youtu\.be|vimeo\.com|\/watch/.test(request.url)) {
       await new Promise((r) => setTimeout(r, 900));
       if (/list=/.test(request.url)) {
         return {
@@ -357,6 +362,40 @@ const commands = {
     ffmpeg = { ...ffmpeg, path: `${home}/../Library/Application Support/dev.rdm.desktop/tools/ffmpeg`, version: 'ffmpeg version 9.0.2' };
     return ffmpeg;
   },
+  extension_status: () => ({
+    bundledVersion: '0.4.0',
+    browsers: browsers.map((b) => ({
+      browser: b.browser,
+      name: b.name,
+      detected: b.detected,
+      registered: b.installed && b.current,
+      folder: `${home}/../Library/Application Support/dev.rdm.desktop/rdm-browser-extension/${b.browser === 'firefox' ? 'firefox' : 'chromium'}`,
+      page: { edge: 'edge://extensions', brave: 'brave://extensions', firefox: 'about:debugging#/runtime/this-firefox' }[b.browser] ?? 'chrome://extensions',
+      seen: extensionsSeen[b.browser] ?? null,
+    })),
+    others: [],
+    dismissed: setupDismissed,
+  }),
+  setup_extension: async ({ browser }) => {
+    await delay(300);
+    const b = browsers.find((x) => x.browser === browser);
+    Object.assign(b, { installed: true, current: true });
+    // The user loads the extension a few seconds later; it says hello.
+    setTimeout(() => {
+      extensionsSeen[browser] = { browser, version: '0.4.0', lastSeen: now() };
+      emit('rdm://extension-seen', extensionsSeen[browser]);
+    }, 4000);
+    return {
+      folder: `${home}/../Library/Application Support/dev.rdm.desktop/rdm-browser-extension/${browser === 'firefox' ? 'firefox' : 'chromium'}`,
+      page: browser === 'firefox' ? 'about:debugging#/runtime/this-firefox' : 'chrome://extensions',
+      opened: browser !== 'edge',
+    };
+  },
+  reveal_extension_folder: () => {},
+  open_extensions_page: () => {},
+  set_setup_dismissed: ({ dismissed }) => {
+    setupDismissed = dismissed;
+  },
   browser_integration_status: () => browsers.map((b) => ({ ...b })),
   install_browser_integration: ({ browser }) => {
     browsers.filter((b) => (browser ? b.browser === browser : b.detected)).forEach((b) => Object.assign(b, { installed: true, current: true }));
@@ -383,9 +422,13 @@ const browsers = [
   ['firefox', 'Firefox', true],
 ].map(([browser, name, detected]) => ({ browser, name, detected, installed: false, current: false, manifestPath: `/mock/${browser}/dev.rdm.host.json` }));
 
-// Simulate the browser extension sending a video a few seconds after load.
+const extensionsSeen = {};
+let setupDismissed = false;
+
+// Simulate the browser extension sending a video a few seconds after load
+// (not with ?quiet, for looking at other dialogs).
 const pending = [];
-setTimeout(() => {
+if (!location.search.includes('quiet')) setTimeout(() => {
   pending.push([
     {
       url: 'https://videos.example.com/hls/master.m3u8',
@@ -409,6 +452,11 @@ function batchRequest() {
 // For poking the UI from the browser console: rdmMock.emit('notice', {message: 'hi'}),
 // rdmMock.batch(), rdmMock.show('captureSettings'), rdmMock.update().
 window.rdmMock = {
+  /** A quality picked with the video button on a page. */
+  video: () => {
+    pending.push([{ url: 'https://www.youtube.com/watch?v=aqz-KE-bpKQ', kind: 'page', title: 'Big Buck Bunny 60fps 4K', variant: '298+140', label: '720p60 · H.264 · 160 MB' }]);
+    emit('rdm://add-request', null);
+  },
   emit: event,
   batch: batchRequest,
   show: (view) => emit('rdm://show-view', view),
