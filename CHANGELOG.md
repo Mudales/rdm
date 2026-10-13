@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.1 (2026-10-13)
 
 ### Fixes
 - Windows: a console window flashed on screen whenever rdm ran ffmpeg,
