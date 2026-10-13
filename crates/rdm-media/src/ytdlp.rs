@@ -131,7 +131,7 @@ impl YtDlp {
 
     /// `yt-dlp --version` / `deno --version` (first line).
     pub async fn version(path: &Path) -> Result<String> {
-        let out = tokio::process::Command::new(path)
+        let out = crate::background_command(path)
             .arg("--version")
             .stdin(Stdio::null())
             .kill_on_drop(true)
@@ -164,7 +164,7 @@ impl YtDlp {
         );
         args.push(request.url.as_str().into());
 
-        let mut child = tokio::process::Command::new(&exe)
+        let mut child = crate::background_command(&exe)
             .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
@@ -942,7 +942,7 @@ impl YtDlpDownload<'_> {
         args.push(template);
         args.push(self.request.url.as_str().into());
 
-        let mut child = tokio::process::Command::new(&exe)
+        let mut child = crate::background_command(&exe)
             .args(&args)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())

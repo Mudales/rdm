@@ -83,7 +83,7 @@ pub(crate) async fn scan(template: &str, file: &Path) -> ScanResult {
     let Some((program, args)) = command_for(template, file) else {
         return ScanResult::Failed("no command configured".into());
     };
-    let child = tokio::process::Command::new(&program)
+    let child = rdm_media::background_command(&program)
         .args(&args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())

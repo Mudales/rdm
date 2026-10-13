@@ -81,7 +81,7 @@ impl Ffmpeg {
 
     /// `ffmpeg -version`'s first line.
     pub async fn version(path: &Path) -> Result<String> {
-        let out = tokio::process::Command::new(path)
+        let out = crate::background_command(path)
             .arg("-version")
             .stdin(Stdio::null())
             .kill_on_drop(true)
@@ -98,7 +98,7 @@ impl Ffmpeg {
 
     /// Runs ffmpeg quietly; on failure the error carries its last messages.
     pub(crate) async fn run(path: &Path, args: &[OsString]) -> Result<()> {
-        let mut child = tokio::process::Command::new(path)
+        let mut child = crate::background_command(path)
             .args(["-hide_banner", "-nostdin", "-loglevel", "error", "-y"])
             .args(args)
             .stdin(Stdio::null())

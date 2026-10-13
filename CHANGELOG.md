@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- Windows: a console window flashed on screen whenever rdm ran ffmpeg,
+  yt-dlp or Deno (finding and downloading videos, merging, the setup
+  assistant's version checks, installs), the antivirus scan or the
+  shutdown command. They now run without one.
+
 ## v0.4.0 (2026-10-13)
 
 ### Setup assistant
