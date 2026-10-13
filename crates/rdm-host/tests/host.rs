@@ -76,6 +76,7 @@ async fn relays_requests_to_the_app() {
             Request::Ping => Response::Pong {
                 version: "9.9.9".into(),
                 protocol: 1,
+                extension: None,
             },
             Request::Add { items, .. } => Response::Added {
                 ids: items.iter().map(|i| i.url.len() as i64).collect(),
@@ -107,7 +108,8 @@ async fn relays_requests_to_the_app() {
         vec![
             Response::Pong {
                 version: "9.9.9".into(),
-                protocol: 1
+                protocol: 1,
+                extension: None,
             },
             Response::Added { ids: vec![28] },
         ]

@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::num::{NonZeroU64, NonZeroUsize};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, Weak};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rdm_core::{
     Destination, DownloadControl, DownloadHandle, DownloadSpec, Engine, EngineConfig, Event,
@@ -12,7 +12,7 @@ use rdm_core::{
 };
 use rdm_media::{
     Ffmpeg, FfmpegConfig, FfmpegSource, MediaControl, MediaEngine, MediaEvent, MediaHandle,
-    MediaJob, MediaOutcome, MediaProgress, OutputFormat, ToolSource, YtDlp,
+    MediaJob, MediaOutcome, MediaProgress, OutputFormat, SiteInfo, ToolSource, YtDlp,
 };
 use serde::Serialize;
 use tokio::runtime::Handle as Runtime;
@@ -63,7 +63,14 @@ struct Inner {
     runtime: Runtime,
     events: broadcast::Sender<ManagerEvent>,
     state: Mutex<State>,
+    /// Pages yt-dlp read recently: the qualities offered in the browser
+    /// are shown again in the Add dialog without reading the page twice.
+    site_cache: Mutex<Vec<(Instant, String, SiteInfo)>>,
 }
+
+/// How long a page read by yt-dlp is reused.
+const SITE_CACHE_FOR: Duration = Duration::from_secs(5 * 60);
+const SITE_CACHE_ENTRIES: usize = 16;
 
 struct State {
     settings: Settings,
@@ -268,6 +275,7 @@ impl Manager {
                 last_schedule_check: jiff::Zoned::now(),
                 skipped,
             }),
+            site_cache: Mutex::new(Vec::new()),
         });
         let ticker = runtime.spawn(ticker(Arc::downgrade(&inner)));
         Ok(Self { inner, ticker })
@@ -406,6 +414,22 @@ impl Manager {
         self.inner.store.save_value(SKIPPED_KEY, &json)
     }
 
+    /// A value the front end keeps between runs (e.g. which browser
+    /// extensions have connected). Stored with the settings, under `ui.`.
+    pub fn ui_value(&self, key: &str) -> Option<String> {
+        self.inner
+            .store
+            .load_value(&format!("ui.{key}"))
+            .unwrap_or_else(|e| {
+                tracing::warn!("cannot read {key}: {e}");
+                None
+            })
+    }
+
+    pub fn set_ui_value(&self, key: &str, value: &str) -> Result<()> {
+        self.inner.store.save_value(&format!("ui.{key}"), value)
+    }
+
     /// Takes over (or stops taking over) downloads from `host` and its
     /// subdomains.
     pub fn set_site_capture(&self, host: &str, capture: bool) -> Result<Settings> {
@@ -500,7 +524,7 @@ impl Manager {
 
     /// Reads a web page with yt-dlp: its video's qualities, or a playlist.
     async fn probe_site(&self, new: &NewDownload, request: Request) -> Result<ProbeResult> {
-        let info = self.inner.media.inspect_site(&request).await?;
+        let info = self.inspect_site(&request).await?;
         let mut named = new.clone();
         named.title = Some(info.title.clone());
         let format = new.stream.as_ref().map(|c| c.format).unwrap_or_default();
@@ -529,6 +553,34 @@ impl Manager {
             duplicate,
             server_checksum: None,
         })
+    }
+
+    /// yt-dlp's reading of a page, reused for a few minutes.
+    async fn inspect_site(&self, request: &Request) -> Result<SiteInfo> {
+        let key = request.url.to_string();
+        {
+            let mut cache = self
+                .inner
+                .site_cache
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            cache.retain(|(at, _, _)| at.elapsed() < SITE_CACHE_FOR);
+            if let Some((_, _, info)) = cache.iter().find(|(_, url, _)| *url == key) {
+                return Ok(info.clone());
+            }
+        }
+        let info = self.inner.media.inspect_site(request).await?;
+        let mut cache = self
+            .inner
+            .site_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        cache.retain(|(_, url, _)| *url != key);
+        if cache.len() >= SITE_CACHE_ENTRIES {
+            cache.remove(0);
+        }
+        cache.push((Instant::now(), key, info.clone()));
+        Ok(info)
     }
 
     async fn probe_stream(&self, new: &NewDownload, request: Request) -> Result<ProbeResult> {

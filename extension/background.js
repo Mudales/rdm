@@ -6,7 +6,9 @@
 import { DEFAULT_RULES, capturesSite, decide, extensionForMime, hostOf } from './lib/capture.js';
 import {
   DEFAULT_SETTINGS,
+  browserName,
   classifyResponse,
+  compareVersions,
   cookieHeader,
   describe,
   dispositionFileName,
@@ -119,7 +121,7 @@ async function mediaFor(tabId) {
 // ---------------------------------------------------------------------------
 
 const NOT_INSTALLED =
-  'rdm is not installed, or not registered with this browser. In rdm, open Settings → Browser and click Register.';
+  'rdm is not installed, or not set up for this browser. In rdm, open ⋯ → Set up browser and tools.';
 
 async function native(message) {
   try {
@@ -135,30 +137,83 @@ async function native(message) {
   }
 }
 
-/** Adds browser context (cookies, User-Agent, Referer) and sends items. */
+/** An item with the browser context servers often require (cookies, User-Agent, Referer). */
+async function enrich(item, pageUrl) {
+  let cookies = '';
+  try {
+    cookies = cookieHeader(await api.cookies.getAll({ url: item.url }));
+  } catch {
+    /* no cookie access for this URL */
+  }
+  return {
+    url: item.url,
+    kind: item.kind || undefined,
+    title: item.title || undefined,
+    fileName: item.fileName || undefined,
+    referer: item.referer || pageUrl || undefined,
+    pageUrl: pageUrl || undefined,
+    userAgent: navigator.userAgent,
+    cookies: cookies || undefined,
+    // A quality already chosen on the page.
+    variant: item.variant || undefined,
+    label: item.label || undefined,
+    format: item.format || undefined,
+  };
+}
+
+/** Sends items to rdm. */
 async function sendToApp(items, mode, pageUrl) {
-  const enriched = await Promise.all(
-    items.map(async (item) => {
-      let cookies = '';
-      try {
-        cookies = cookieHeader(await api.cookies.getAll({ url: item.url }));
-      } catch {
-        /* no cookie access for this URL */
-      }
-      return {
-        url: item.url,
-        kind: item.kind || undefined,
-        title: item.title || undefined,
-        fileName: item.fileName || undefined,
-        referer: item.referer || pageUrl || undefined,
-        pageUrl: pageUrl || undefined,
-        userAgent: navigator.userAgent,
-        cookies: cookies || undefined,
-      };
-    }),
-  );
+  const enriched = await Promise.all(items.map((item) => enrich(item, pageUrl)));
   return native({ type: 'add', mode, items: enriched });
 }
+
+// ---------------------------------------------------------------------------
+// Introducing ourselves to the app, and updating from it. rdm keeps the
+// folder this extension is loaded from up to date; when it says it ships a
+// newer version, reloading picks the new files up.
+// ---------------------------------------------------------------------------
+
+const OWN_VERSION = api.runtime.getManifest().version;
+const BROWSER = browserName(navigator, typeof globalThis.browser?.runtime?.getBrowserInfo === 'function');
+const HELLO_EVERY_MS = 10 * 60_000;
+
+async function hello({ force = false } = {}) {
+  if (!force) {
+    const { lastHello = 0 } = await api.storage.session.get('lastHello').catch(() => ({}));
+    if (Date.now() - lastHello < HELLO_EVERY_MS) return null;
+  }
+  let reply = await native({ type: 'hello', extension: { version: OWN_VERSION, browser: BROWSER } });
+  // An rdm older than this extension does not know "hello".
+  if (reply?.type === 'error' && /bad message|unknown variant/i.test(reply.message)) reply = await native({ type: 'ping' });
+  if (reply?.type === 'pong') {
+    await api.storage.session.set({ lastHello: Date.now() }).catch(() => {});
+    return { ...reply, update: await updateFrom(reply.extension) };
+  }
+  return reply;
+}
+
+/**
+ * Reloads once to pick up a newer version rdm wrote to our folder. If the
+ * version did not change (the extension was loaded from somewhere else),
+ * it is not tried again for that version: the popup explains instead.
+ * Returns what the popup should say: null, 'app' (the app is older) or
+ * 'extension' (this extension is older and could not update itself).
+ */
+async function updateFrom(shipped) {
+  if (!shipped) return null;
+  const cmp = compareVersions(shipped, OWN_VERSION);
+  if (cmp < 0) return 'app';
+  if (cmp === 0) return null;
+  const { reloadedFor } = await api.storage.local.get('reloadedFor').catch(() => ({}));
+  if (reloadedFor === shipped) return 'extension';
+  await api.storage.local.set({ reloadedFor: shipped }).catch(() => {});
+  console.info(`rdm: updating the extension from ${OWN_VERSION} to ${shipped}`);
+  api.runtime.reload();
+  return null;
+}
+
+api.runtime.onInstalled.addListener(() => hello({ force: true }).catch(() => {}));
+hello().catch(() => {});
 
 /** Shows a failed menu action on the toolbar icon (menus have no UI). */
 function flagError(tabId, reply) {
@@ -225,6 +280,30 @@ function bypassed(url) {
   return false;
 }
 
+// Safety nets against capture loops: the same address is taken at most once
+// in a while, and a burst of downloads nobody could have clicked that fast
+// pauses capturing (the browser keeps them).
+const RECAPTURE_MS = 30_000;
+const BURST = { count: 8, windowMs: 10_000, pauseMs: 60_000 };
+const recentCaptures = new Map(); // url -> time taken
+let captureTimes = [];
+let pausedUntil = 0;
+
+function mayCapture(url) {
+  const now = Date.now();
+  for (const [u, at] of recentCaptures) if (now - at > RECAPTURE_MS) recentCaptures.delete(u);
+  if (now < pausedUntil || recentCaptures.has(url)) return false;
+  captureTimes = captureTimes.filter((at) => now - at < BURST.windowMs);
+  if (captureTimes.length >= BURST.count) {
+    pausedUntil = now + BURST.pauseMs;
+    console.warn('rdm: too many downloads at once; leaving them to the browser for a minute');
+    return false;
+  }
+  captureTimes.push(now);
+  recentCaptures.set(url, now);
+  return true;
+}
+
 api.downloads.onCreated.addListener(async (item) => {
   const url = item.finalUrl || item.url;
   if (reissued.delete(url) || bypassed(url)) return;
@@ -236,6 +315,7 @@ api.downloads.onCreated.addListener(async (item) => {
     if (decision === 'notSelected' && extension) native({ type: 'reportSkipped', extension });
     return;
   }
+  if (!mayCapture(url)) return;
 
   // Stop the browser's copy first; rdm takes it from here.
   await api.downloads.cancel(item.id).catch(() => {});
@@ -485,7 +565,13 @@ const handlers = {
     return sendToApp(items, msg.mode ?? 'ask', msg.pageUrl ?? sender.tab?.url);
   },
   async ping() {
-    return native({ type: 'ping' });
+    return hello({ force: true });
+  },
+  /** The qualities of a page's video (yt-dlp) or of a stream, for the video button. */
+  async formats(msg, sender) {
+    const pageUrl = msg.pageUrl ?? sender.tab?.url;
+    const item = await enrich({ title: sender.tab?.title, ...msg.item }, pageUrl);
+    return native({ type: 'formats', item });
   },
   async bypass(msg) {
     bypass.set(msg.url, Date.now() + BYPASS_MS);

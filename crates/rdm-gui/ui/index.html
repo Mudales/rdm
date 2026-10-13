@@ -76,7 +76,7 @@
     <span id="status-speed"></span>
   </footer>
 
-  <!-- Add URL -->
+  <!-- Add URL: the essentials, with the rest behind "More options" -->
   <dialog id="dlg-add" aria-labelledby="dlg-add-title">
     <form method="dialog" id="form-add">
       <h2 id="dlg-add-title">Add download</h2>
@@ -88,6 +88,10 @@
         </div>
       </label>
       <p class="probe-info" id="add-info" aria-live="polite"></p>
+      <div class="inline-action" id="add-page-action" hidden>
+        <button type="button" class="primary" id="add-page-btn"></button>
+        <span class="hint" id="add-page-hint"></span>
+      </div>
       <div class="note" id="add-duplicate" hidden>
         <span id="add-duplicate-text"></span>
         <label class="check"><input type="checkbox" id="add-allow-duplicate"> Download it again</label>
@@ -106,31 +110,34 @@
             </select>
           </label>
         </div>
-        <p class="hint" id="add-site-note" hidden></p>
+        <div class="hint site-note" id="add-site-note" hidden>
+          <span id="add-site-note-text"></span>
+          <button type="button" id="add-get-ffmpeg" hidden></button>
+        </div>
       </div>
       <label class="field">
         <span>Save as</span>
         <input id="add-name" type="text" placeholder="Determined from the server" spellcheck="false">
       </label>
-      <div class="grid2">
-        <label class="field">
-          <span>Category</span>
-          <select id="add-category"></select>
-        </label>
-        <label class="field">
-          <span>Queue</span>
-          <select id="add-queue"></select>
-        </label>
-      </div>
       <label class="field">
         <span>Folder</span>
         <div class="row">
           <input id="add-dir" type="text" spellcheck="false">
-          <button type="button" id="add-browse">Browse…</button>
+          <button type="button" id="add-browse" title="Choose a folder">Browse…</button>
         </div>
       </label>
-      <details class="advanced">
-        <summary>Advanced</summary>
+      <label class="check" id="add-remember-row" hidden><input type="checkbox" id="add-remember"> <span id="add-remember-label">Always save this category here</span></label>
+      <div class="add-more" id="add-more" hidden>
+        <div class="grid2">
+          <label class="field">
+            <span>Category</span>
+            <select id="add-category"></select>
+          </label>
+          <label class="field">
+            <span>Queue</span>
+            <select id="add-queue"></select>
+          </label>
+        </div>
         <div class="grid2">
           <label class="field">
             <span>Connections</span>
@@ -145,14 +152,18 @@
         <label class="field"><span>User-Agent</span><input id="add-ua" type="text" spellcheck="false"></label>
         <label class="field"><span>Cookies (kept in memory only)</span><input id="add-cookies" type="text" spellcheck="false" placeholder="name=value; other=value"></label>
         <label class="field"><span>Expected checksum (verified when done)</span><input id="add-checksum" type="text" spellcheck="false" placeholder="sha-256:… or md5:… or plain hex"></label>
-      </details>
+      </div>
       <p class="error" id="add-error" role="alert"></p>
       <div class="actions">
-        <button type="button" value="cancel" id="add-cancel">Cancel</button>
+        <button type="button" class="expander" id="add-more-toggle" aria-expanded="false" aria-controls="add-more" title="Category, queue, connections, speed limit, cookies, checksum">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>
+          <span>More options</span>
+        </button>
         <div class="spacer"></div>
-        <button type="button" id="add-paused">Add stopped</button>
-        <button type="button" id="add-queue-btn">Add to queue</button>
-        <button type="submit" class="primary" id="add-now">Start now</button>
+        <button type="button" value="cancel" id="add-cancel">Cancel</button>
+        <button type="button" id="add-paused" hidden>Add stopped</button>
+        <button type="button" id="add-queue-btn" title="Add to the queue; it starts when the queue runs">Download later</button>
+        <button type="submit" class="primary" id="add-now">Start download</button>
       </div>
     </form>
   </dialog>
@@ -288,7 +299,10 @@
       <section class="tab" data-tab="browser" hidden>
         <label class="check"><input type="checkbox" id="set-clipboard"> Offer to download links that are copied, when they point to a file type selected under Capture</label>
         <h3 class="subhead">Browser extension</h3>
-        <p class="hint">The rdm extension sends links, videos and captured downloads to this app through a small helper (rdm-host). Register the helper with your browsers, then install the extension.</p>
+        <p class="hint">The rdm extension sends links, videos and captured downloads to this app through a small helper (rdm-host). The setup assistant adds both to a browser in a few clicks.</p>
+        <div class="row">
+          <button type="button" class="primary" id="set-open-setup">Set up the browser extension…</button>
+        </div>
         <div class="list-editor browsers" id="set-browsers" aria-live="polite"></div>
         <div class="row">
           <button type="button" id="set-browsers-install">Register with all detected browsers</button>
@@ -378,6 +392,66 @@
         <button type="button" id="batch-paused">Add stopped</button>
         <button type="button" id="batch-queue-btn">Add to queue</button>
         <button type="submit" class="primary" id="batch-now">Start now</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Setup assistant: browser extension, yt-dlp, ffmpeg -->
+  <dialog id="dlg-setup" class="wide" aria-labelledby="dlg-setup-title">
+    <form method="dialog" id="form-setup">
+      <h2 id="dlg-setup-title">Set up rdm</h2>
+      <p class="hint">Three add-ons make rdm a complete download manager. Nothing is installed until you click its button.</p>
+      <ol class="setup-steps">
+        <li class="setup-step" id="setup-ext">
+          <div class="step-head">
+            <span class="step-mark" aria-hidden="true"></span>
+            <div class="step-text">
+              <strong>Browser extension</strong>
+              <span class="hint">Sends your browser's downloads and videos to rdm, and adds a Download button on videos.</span>
+            </div>
+          </div>
+          <div class="setup-browsers" id="setup-browsers" aria-live="polite"></div>
+          <div class="setup-guide" id="setup-guide" hidden>
+            <ol id="setup-guide-steps"></ol>
+            <div class="row folder-row">
+              <code id="setup-folder"></code>
+              <button type="button" id="setup-copy">Copy</button>
+              <button type="button" id="setup-reveal">Show folder</button>
+            </div>
+            <p class="hint" id="setup-guide-note"></p>
+            <p class="waiting" id="setup-waiting" aria-live="polite"></p>
+          </div>
+          <p class="error" id="setup-ext-error" role="alert"></p>
+        </li>
+        <li class="setup-step" id="setup-yt">
+          <div class="step-head">
+            <span class="step-mark" aria-hidden="true"></span>
+            <div class="step-text">
+              <strong>Videos from YouTube and 1,000+ sites</strong>
+              <span class="hint">yt-dlp finds the video on a page and lists its qualities; Deno lets it read YouTube.</span>
+            </div>
+            <button type="button" class="primary" id="setup-yt-install" hidden>Install</button>
+          </div>
+          <p class="hint step-detail" id="setup-yt-detail"></p>
+          <p class="error" id="setup-yt-error" role="alert"></p>
+        </li>
+        <li class="setup-step" id="setup-ff">
+          <div class="step-head">
+            <span class="step-mark" aria-hidden="true"></span>
+            <div class="step-text">
+              <strong>ffmpeg</strong>
+              <span class="hint">Joins video and audio that sites send separately, and converts to MP4 or MP3.</span>
+            </div>
+            <button type="button" class="primary" id="setup-ff-install" hidden>Install</button>
+          </div>
+          <p class="hint step-detail" id="setup-ff-detail"></p>
+          <p class="error" id="setup-ff-error" role="alert"></p>
+        </li>
+      </ol>
+      <div class="actions">
+        <label class="check"><input type="checkbox" id="setup-dismiss"> Don't show this when rdm starts</label>
+        <div class="spacer"></div>
+        <button type="submit" class="primary" id="setup-close">Done</button>
       </div>
     </form>
   </dialog>

@@ -14,6 +14,8 @@ import {
   fileLinks,
   isSupportedKind,
   DEFAULT_SETTINGS,
+  browserName,
+  compareVersions,
 } from '../lib/detect.js';
 import { DEFAULT_RULES, capturesSite, decide, extensionForMime, glob } from '../lib/capture.js';
 // The same cases run against the Rust implementation (rdm-manager).
@@ -99,6 +101,35 @@ export const cases = [
     t.equal(downloadCandidate({ url: 'data:application/zip;base64,AA', filename: 'a.zip' }, s), null);
     t.equal(downloadCandidate({ url: 'https://x/a.zip', filename: 'a.zip', byExtensionId: 'other' }, s), null);
     t.equal(downloadCandidate({ url: 'https://x/a.zip', filename: 'a.zip' }, { ...s, captureDownloads: false }), null);
+  }],
+
+  ['versions compare by number, not text', (t) => {
+    t.ok(compareVersions('0.10.0', '0.9.9') > 0);
+    t.ok(compareVersions('0.3.1', '0.3.1') === 0);
+    t.ok(compareVersions('0.3', '0.3.1') < 0);
+    t.ok(compareVersions('1.0.0', undefined) > 0);
+  }],
+
+  ['the browser is named for the app', (t) => {
+    t.equal(browserName({}, true), 'firefox');
+    t.equal(browserName({ brave: {}, userAgent: 'Chrome/140' }), 'brave');
+    t.equal(browserName({ userAgent: 'Mozilla/5.0 Chrome/140.0 Safari/537.36 Edg/140.0' }), 'edge');
+    t.equal(browserName({ userAgentData: { brands: [{ brand: 'Google Chrome' }, { brand: 'Chromium' }] } }), 'chrome');
+    t.equal(browserName({ userAgentData: { brands: [{ brand: 'Chromium' }] } }), 'chromium');
+    t.equal(browserName({ userAgent: 'Chrome/140 OPR/120' }), 'opera');
+  }],
+
+  ['downloads from the browser history are never taken', (t) => {
+    const s = DEFAULT_SETTINGS;
+    const now = Date.parse('2026-10-13T12:00:00Z');
+    const item = { url: 'https://x/setup.exe', filename: '', state: 'in_progress', startTime: '2026-10-13T11:59:58Z' };
+    t.equal(downloadCandidate(item, s, now)?.url, 'https://x/setup.exe');
+    // Chrome loads its history through onCreated: finished, interrupted, or old.
+    t.equal(downloadCandidate({ ...item, state: 'complete' }, s, now), null);
+    t.equal(downloadCandidate({ ...item, state: 'interrupted' }, s, now), null);
+    t.equal(downloadCandidate({ ...item, startTime: '2026-09-01T08:00:00Z' }, s, now), null);
+    // A browser that reports neither is trusted.
+    t.equal(downloadCandidate({ url: 'https://x/a.zip', filename: 'a.zip' }, s, now)?.url, 'https://x/a.zip');
   }],
 
   ['Content-Disposition file names', (t) => {

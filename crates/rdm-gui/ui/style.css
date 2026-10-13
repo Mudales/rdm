@@ -262,8 +262,15 @@ fieldset.field { gap: 6px; }
 .hint { color: var(--muted); margin: 0; }
 .probe-info { margin: -4px 0 0; color: var(--muted); min-height: 1.4em; }
 .probe-info.ok { color: var(--done); }
-details.advanced summary { cursor: pointer; color: var(--muted); }
-details.advanced[open] { display: flex; flex-direction: column; gap: 10px; }
+.add-more { display: flex; flex-direction: column; gap: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
+button.expander { border-color: transparent; background: transparent; color: var(--muted); padding: 6px 8px 6px 4px; }
+button.expander:hover:not(:disabled) { color: var(--text); }
+button.expander svg { transition: transform 0.15s; }
+button.expander[aria-expanded=true] svg { transform: rotate(90deg); }
+.inline-action { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; margin-top: -4px; }
+.inline-action .hint { font-size: 12px; }
+.site-note { display: flex; align-items: center; gap: 10px; margin-top: 8px; }
+.site-note span { flex: 1; }
 
 .tabs { display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 1px solid var(--border); margin-bottom: 6px; }
 .tabs button { border: 0; border-radius: 6px 6px 0 0; background: transparent; padding: 7px 10px; color: var(--muted); }
@@ -398,3 +405,32 @@ select.inline-select { width: auto; padding: 3px 6px; }
   .toolbar button span { display: none; }
   .toolbar #search { width: 140px; }
 }
+
+/* Setup assistant */
+#dlg-setup form { max-height: calc(100vh - 40px); overflow-y: auto; }
+.setup-steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.setup-step { display: flex; flex-direction: column; gap: 8px; padding: 12px 14px; border: 1px solid var(--border); border-radius: 10px; }
+.setup-step.done { border-color: color-mix(in srgb, var(--done) 45%, var(--border)); }
+.step-head { display: flex; align-items: center; gap: 12px; }
+.step-text { flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.step-mark { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--border); flex: none; display: grid; place-items: center; }
+.setup-step.done .step-mark { border-color: var(--done); background: var(--done); }
+.setup-step.done .step-mark::after { content: ""; width: 9px; height: 5px; border: solid #fff; border-width: 0 0 2px 2px; transform: translateY(-1px) rotate(-45deg); }
+.setup-step.busy .step-mark { border-color: var(--accent); border-top-color: transparent; animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.step-detail { margin-left: 34px; font-size: 12px; }
+.step-detail.ok { color: var(--done); }
+.setup-browsers { display: flex; flex-direction: column; gap: 4px; margin-left: 34px; }
+.setup-browser { display: grid; grid-template-columns: 90px 1fr auto; gap: 10px; align-items: center; }
+.setup-browser .state { color: var(--muted); }
+.setup-browser .state.ok { color: var(--done); }
+.setup-browser .state.warn { color: var(--warn); }
+.setup-guide { margin-left: 34px; padding: 10px 12px; border-radius: 8px; background: var(--accent-soft); display: flex; flex-direction: column; gap: 8px; }
+.setup-guide ol { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+.setup-guide code, .setup-guide kbd { font: 12px/1.4 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+.setup-guide kbd { padding: 0 5px; border: 1px solid var(--border); border-radius: 4px; background: var(--panel); }
+.folder-row { align-items: center; }
+.folder-row code { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; -webkit-user-select: text; user-select: text; }
+.waiting { margin: 0; color: var(--muted); }
+.waiting.ok { color: var(--done); font-weight: 600; }
+#dlg-setup .actions { align-items: center; position: sticky; bottom: -18px; margin: 0 -20px -18px; padding: 10px 20px 14px; background: var(--panel); border-top: 1px solid var(--border); }

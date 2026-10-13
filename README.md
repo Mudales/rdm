@@ -43,9 +43,9 @@ Release builds are not code-signed by Apple or Microsoft.
 [docs/RELEASING.md](docs/RELEASING.md#installing-unsigned-builds) explains
 how to open them. Updates are signed: rdm checks for new versions (Settings
 → About) and installs one only if its signature matches the key built into
-the app. Then load the extension
-([extension/README.md](extension/README.md)); the scripts already
-registered it with your browsers.
+the app. On first start, rdm's setup assistant adds the browser extension
+(in a few clicks), yt-dlp and ffmpeg; see
+[extension/README.md](extension/README.md#installing).
 
 ## Architecture
 

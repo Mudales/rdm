@@ -380,3 +380,56 @@ async fn a_web_page_is_never_saved_as_the_download() {
         .unwrap();
     manager.shutdown().await;
 }
+
+/// The qualities listed on the page (the extension's video button) are shown
+/// again in the Add dialog: yt-dlp reads the page once for both.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_page_read_by_ytdlp_is_reused_for_a_while() {
+    use rdm_manager::{Manager, NewDownload, StreamChoice};
+
+    let dir = tempfile::tempdir().unwrap();
+    let ytdlp = fake_ytdlp(
+        dir.path(),
+        json!({"info": {
+            "title": "Clip", "webpage_url": PAGE,
+            "formats": [
+                {"format_id": "18", "ext": "mp4", "protocol": "https", "url": "https://cdn.example/v.mp4",
+                 "vcodec": "avc1", "acodec": "mp4a", "height": 360, "filesize": 1000}
+            ]
+        }}),
+    );
+    let manager = Manager::open_with_tools(
+        &dir.path().join("data"),
+        rdm_core::EngineConfig::default(),
+        rdm_media::FfmpegConfig::Disabled,
+        YtDlp::at(ytdlp),
+    )
+    .await
+    .unwrap();
+    let page = |variant: Option<&str>| NewDownload {
+        url: PAGE.into(),
+        stream: Some(StreamChoice {
+            site: true,
+            variant: variant.map(str::to_owned),
+            ..StreamChoice::default()
+        }),
+        ..NewDownload::default()
+    };
+    let reads = || {
+        runs(dir.path())
+            .iter()
+            .filter(|args| args.iter().any(|a| a == "--dump-single-json"))
+            .count()
+    };
+
+    let first = manager.probe(&page(None)).await.unwrap();
+    let again = manager.probe(&page(Some("18"))).await.unwrap();
+    assert_eq!(first.site, again.site);
+    assert_eq!(reads(), 1, "the second probe reused the first reading");
+
+    // Another page is read on its own.
+    let mut other = page(None);
+    other.url = "https://videos.example/watch?v=43".into();
+    manager.probe(&other).await.unwrap();
+    assert_eq!(reads(), 2);
+}
