@@ -203,6 +203,7 @@ mod tests {
             etag: etag.map(Into::into),
             last_modified: lm.map(Into::into),
             digest: None,
+            stored_encoding: None,
         }
     }
 

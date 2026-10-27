@@ -6,6 +6,11 @@
 //! in `Content-Range`. A `200` reply means ranges are not supported, and its
 //! body is handed to the single-stream path instead of being thrown away,
 //! which also keeps one-time download links working.
+//!
+//! A `206` is not taken at face value: when the server stores or sends the
+//! entity compressed, its ranges and total count those encoded bytes rather
+//! than the file's, so the probe asks again without a range and the download
+//! runs as a single stream.
 
 use percent_encoding::percent_decode_str;
 use reqwest::header::{self, HeaderMap};
@@ -35,6 +40,10 @@ pub struct ProbeInfo {
     pub last_modified: Option<String>,
     /// A checksum of the whole file published by the server, if any.
     pub digest: Option<ContentDigest>,
+    /// Set when the server stores or sends the entity under an encoding of
+    /// its own, which makes byte offsets address those encoded bytes instead
+    /// of the file. Such a resource is never segmented or resumed.
+    pub stored_encoding: Option<String>,
 }
 
 /// A server-published checksum of the complete file.
@@ -70,6 +79,14 @@ pub(crate) async fn probe(client: &HttpClient) -> Result<(ProbeInfo, Option<Resp
 
     match resp.status() {
         StatusCode::PARTIAL_CONTENT => {
+            // The offsets in a range only address the file when the server
+            // sends the file's own bytes. When it keeps the entity encoded,
+            // they address the encoded ones instead, and the reported total
+            // is the encoded length: splitting it into segments, or resuming
+            // one, would assemble a file that looks complete and is not.
+            if http::stored_encoding(resp.headers()).is_some() {
+                return full_body(client).await;
+            }
             let total = http::content_range(resp.headers())
                 .filter(|cr| cr.first == 0)
                 .ok_or_else(|| Error::Protocol("206 without a valid Content-Range".into()))?
@@ -84,18 +101,22 @@ pub(crate) async fn probe(client: &HttpClient) -> Result<(ProbeInfo, Option<Resp
             let info = build_info(client.url(), &resp, size, false);
             Ok((info, Some(resp)))
         }
-        StatusCode::RANGE_NOT_SATISFIABLE => {
-            // Typically an empty file ("bytes */0"). Ask again without a range.
-            let resp = client.get().send().await.map_err(Error::network)?;
-            if resp.status() != StatusCode::OK {
-                return Err(http::status_error(&resp));
-            }
-            let size = resp.content_length();
-            let info = build_info(client.url(), &resp, size, false);
-            Ok((info, Some(resp)))
-        }
+        // Typically an empty file ("bytes */0").
+        StatusCode::RANGE_NOT_SATISFIABLE => full_body(client).await,
         _ => Err(http::status_error(&resp)),
     }
+}
+
+/// Asks again without a `Range`, for resources that cannot be addressed by
+/// byte offsets. The resource is marked non-resumable and the full body is
+/// handed to the single-stream path rather than thrown away.
+async fn full_body(client: &HttpClient) -> Result<(ProbeInfo, Option<Response>)> {
+    let resp = client.get().send().await.map_err(Error::network)?;
+    if resp.status() != StatusCode::OK {
+        return Err(http::status_error(&resp));
+    }
+    let size = resp.content_length();
+    Ok((build_info(client.url(), &resp, size, false), Some(resp)))
 }
 
 fn build_info(url: &Url, resp: &Response, size: Option<u64>, resumable: bool) -> ProbeInfo {
@@ -114,6 +135,7 @@ fn build_info(url: &Url, resp: &Response, size: Option<u64>, resumable: bool) ->
         content_type: http::header_str(headers, header::CONTENT_TYPE),
         etag: http::header_str(headers, header::ETAG),
         last_modified: http::header_str(headers, header::LAST_MODIFIED),
+        stored_encoding: http::stored_encoding(headers),
         digest: repr_digest(headers).or_else(|| {
             headers
                 .get("content-md5")
@@ -426,6 +448,7 @@ mod tests {
             etag: Some("\"abc\"".into()),
             last_modified: Some("Mon, 01 Jan 2024 00:00:00 GMT".into()),
             digest: None,
+            stored_encoding: None,
         };
         assert_eq!(info.if_range(), Some("\"abc\""));
         info.etag = Some("W/\"abc\"".into());

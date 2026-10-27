@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- Downloads from servers that keep a file compressed (Google Cloud
+  Storage among them, which hosts Warp's installer) came out corrupt: the
+  file was the compressed length and would not open. Such a server
+  answers a byte range from its compressed copy while sending the body
+  decompressed, so the offsets, and the size it reports, are the
+  compressed ones. Splitting that into connections wrote decompressed and
+  compressed bytes into the same file. rdm now recognises this and
+  downloads over one connection, which returns the file itself, and says
+  so. A range whose body outruns what was asked for is no longer trusted
+  either.
+
 ## v0.4.2 (2026-10-27)
 
 ### Fixes

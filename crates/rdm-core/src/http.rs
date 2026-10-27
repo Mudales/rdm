@@ -196,9 +196,53 @@ fn parse_content_range(v: &str) -> Option<ContentRange> {
     (first <= last).then_some(ContentRange { first, last, total })
 }
 
+/// The encoding an entity is stored or sent under, when that is not the
+/// file's own bytes.
+///
+/// Byte ranges then count encoded bytes, so neither the offsets nor the total
+/// in `Content-Range` describe the file being downloaded. `Content-Encoding`
+/// is the plain case. Google Cloud Storage adds `x-goog-stored-content-encoding`
+/// for "decompressive transcoding": it gunzips the body on the way out, yet
+/// still applies `Range` to the stored (compressed) object and reports the
+/// compressed length as the total. A segmented download of such a URL mixes
+/// decompressed and compressed bytes into a file that looks complete.
+pub(crate) fn stored_encoding(headers: &HeaderMap) -> Option<String> {
+    ["content-encoding", "x-goog-stored-content-encoding"]
+        .into_iter()
+        .filter_map(|name| headers.get(name)?.to_str().ok())
+        .map(str::trim)
+        .find(|v| !v.is_empty() && !v.eq_ignore_ascii_case("identity"))
+        .map(str::to_ascii_lowercase)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stored_encoding_spots_an_encoded_entity() {
+        let encoded = |name: &str, value: &str| {
+            let mut h = HeaderMap::new();
+            h.insert(
+                HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                value.parse().unwrap(),
+            );
+            stored_encoding(&h)
+        };
+        // Google Cloud Storage decompresses the body on the way out but still
+        // counts `Range` against the stored, compressed object.
+        assert_eq!(
+            encoded("x-goog-stored-content-encoding", "gzip"),
+            Some("gzip".into())
+        );
+        assert_eq!(encoded("content-encoding", "GZIP"), Some("gzip".into()));
+        assert_eq!(encoded("content-encoding", "br"), Some("br".into()));
+        // Neither of these means the bytes are anything but the file's own.
+        assert_eq!(encoded("content-encoding", "identity"), None);
+        assert_eq!(encoded("x-goog-stored-content-encoding", "identity"), None);
+        assert_eq!(encoded("content-encoding", "  "), None);
+        assert_eq!(stored_encoding(&HeaderMap::new()), None);
+    }
 
     #[test]
     fn content_range_parsing() {

@@ -96,6 +96,15 @@ async fn run_inner(ctx: &Arc<Ctx>) -> Result<Outcome> {
         });
     };
 
+    if let Some(encoding) = &info.stored_encoding {
+        let msg = format!(
+            "the server holds this as a {encoding}-encoded entity, whose byte ranges do not \
+             address the file; downloading over a single connection"
+        );
+        tracing::warn!("{msg}");
+        ctx.emit(Event::Warning(msg));
+    }
+
     let prepared = {
         let (spec, info) = (ctx.spec.clone(), info.clone());
         spawn_blocking(move || prepare(&spec, &info))
@@ -767,6 +776,7 @@ async fn fetch_range(
         Some(max) => end.min(start.saturating_add(max.get())),
         None => end,
     };
+    let requested = request_end - start;
 
     let mut req = t
         .client
@@ -784,6 +794,7 @@ async fn fetch_range(
 
     let _active = ActiveGuard::new(&t.active);
     let mut buf_offset = start;
+    let mut received = 0u64;
     let outcome = loop {
         let chunk = tokio::select! {
             biased;
@@ -808,6 +819,13 @@ async fn fetch_range(
             }
             Err(e) => break Err(Error::network(e)),
         };
+        received += bytes.len() as u64;
+        if received > requested {
+            // The body outruns the range that was asked for, so it is not that
+            // range: the surplus would otherwise be dropped silently and the
+            // bytes that were kept blamed on offsets they never came from.
+            break Err(Error::RangeNotHonored);
+        }
         tokio::select! {
             biased;
             _ = until_stopped(rx) => break Ok(SegmentEnd::Stopped),
@@ -846,6 +864,13 @@ fn check_range_response(t: &Transfer, resp: &Response, start: u64) -> Result<()>
             });
         }
         _ => return Err(http::status_error(resp)),
+    }
+    // A server that starts encoding the entity part-way through a download is
+    // no longer sending bytes that belong at `start`; the single-stream path
+    // is the only one that can still make sense of them.
+    if let Some(encoding) = http::stored_encoding(resp.headers()) {
+        tracing::warn!("the server switched to a {encoding}-encoded entity");
+        return Err(Error::RangeNotHonored);
     }
     let cr = http::content_range(resp.headers())
         .ok_or_else(|| Error::Protocol("206 response without a valid Content-Range".into()))?;

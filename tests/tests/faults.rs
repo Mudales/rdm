@@ -299,6 +299,33 @@ async fn misaligned_content_range_is_rejected() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_range_whose_body_outruns_it_falls_back_to_one_stream() {
+    // A store that applies `Range` to a compressed copy and decompresses what
+    // it finds sends a body that does not match the range in its headers.
+    // Nothing else gives it away: the status, the `Content-Range` and the
+    // total are all consistent, and the surplus bytes would simply be dropped
+    // while the rest were trusted at offsets they never came from.
+    let size = 3 * MIB + 7;
+    let server = server(|c| {
+        c.size = size;
+        c.content_length = false; // chunked, so only the body length tells
+        c.faults.range_overrun = 64 * 1024;
+    })
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("out.bin");
+
+    let handle = engine()
+        .start(spec(&server, Destination::File(dest.clone()), 4))
+        .unwrap();
+    let mut rx = handle.subscribe();
+    completed(handle).await;
+    assert_content(&dest, 0, size);
+    let w = warnings(&drain(&mut rx));
+    assert!(w.iter().any(|w| w.contains("single connection")), "{w:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn server_that_stops_honoring_ranges_falls_back_to_one_stream() {
     let size = 3 * MIB + 1;
     let server = server(|c| {

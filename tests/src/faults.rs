@@ -25,6 +25,11 @@ pub struct Faults {
     /// Answer range requests starting this many bytes *before* the requested
     /// offset (with a matching, i.e. honest but wrong, `Content-Range`).
     pub range_shift: u64,
+    /// Send this many bytes *past* the end of the requested range while
+    /// `Content-Range` still claims the range that was asked for. This is how
+    /// a store that applies `Range` to a compressed copy and then decompresses
+    /// it behaves: the body is not the slice its headers describe.
+    pub range_overrun: u64,
     /// Honor `Range` only for requests whose index (0-based, in arrival
     /// order) is below this. Later requests get the full 200 response.
     pub ranges_until_request: Option<u64>,
