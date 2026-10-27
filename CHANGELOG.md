@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- Extension: on playlist sites (lessons, podcasts) the toolbar list lost
+  the audio after about six episodes until the page was reloaded. The
+  site's player keeps earlier files open, and browsers open only six
+  connections to a server, so the next file's request waited for an
+  answer, and rdm listed media only once the server answered. Files are
+  now listed as soon as they are requested (*not loaded yet* until the
+  answer arrives), and the list no longer drops the file that started
+  just before the page's address changed.
+
 ## v0.4.1 (2026-10-13)
 
 ### Fixes

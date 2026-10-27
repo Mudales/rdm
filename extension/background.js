@@ -7,6 +7,7 @@ import { DEFAULT_RULES, capturesSite, decide, extensionForMime, hostOf } from '.
 import {
   DEFAULT_SETTINGS,
   browserName,
+  classifyRequest,
   classifyResponse,
   compareVersions,
   cookieHeader,
@@ -17,6 +18,7 @@ import {
   fileNameFromUrl,
   header,
   isSupportedKind,
+  mediaKey,
   responseSize,
 } from './lib/detect.js';
 
@@ -78,30 +80,88 @@ function clearTab(tabId) {
   updateBadge(tabId);
 }
 
+/**
+ * Media requested this shortly before the page's address changes belongs to
+ * the new page: a single-page site (a playlist) changes the address and
+ * starts the next file at about the same time, in either order.
+ */
+const KEEP_ON_NAVIGATION_MS = 3000;
+
+/** The tab moved to another address: forget the media found before it. */
+function clearTabOnNavigation(tabId) {
+  const items = tabMedia.get(tabId);
+  if (!items) return updateBadge(tabId);
+  const since = Date.now() - KEEP_ON_NAVIGATION_MS;
+  for (const [url, item] of items) if (!(item.seenAt >= since)) items.delete(url);
+  if (!items.size) tabMedia.delete(tabId);
+  persist();
+  updateBadge(tabId);
+}
+
+function changed(tabId) {
+  updateBadge(tabId);
+  persist();
+  refreshMenusSoon();
+}
+
+/** Adds (or refreshes, as the most recent) a detected item on a tab. */
+function addMedia(tabId, item) {
+  restore().then(() => {
+    let items = tabMedia.get(tabId);
+    if (!items) tabMedia.set(tabId, (items = new Map()));
+    const previous = items.get(item.url);
+    // Another request for a file already answered adds nothing.
+    if (item.pending && previous && !previous.pending) return;
+    items.delete(item.url); // re-insert as most recent
+    items.set(item.url, { ...previous, ...item, size: item.size ?? previous?.size ?? null, seenAt: Date.now() });
+    while (items.size > MAX_ITEMS_PER_TAB) items.delete(items.keys().next().value);
+    changed(tabId);
+  });
+}
+
+/** A file listed when its request started turned out not to be media (or failed). */
+function dropPending(tabId, url) {
+  restore().then(() => {
+    const items = tabMedia.get(tabId);
+    if (!items?.get(url)?.pending) return;
+    items.delete(url);
+    changed(tabId);
+  });
+}
+
+// As soon as a request for a media file starts: a page that keeps its
+// earlier files open (a playlist) can leave the next one waiting for a
+// connection, and its answer, for minutes.
+api.webRequest.onBeforeRequest.addListener(
+  (details) => {
+    if (details.tabId < 0) return;
+    const item = classifyRequest(details);
+    if (item) addMedia(details.tabId, item);
+  },
+  { urls: ['http://*/*', 'https://*/*'] },
+);
+
 api.webRequest.onHeadersReceived.addListener(
   (details) => {
     if (details.tabId < 0) return;
     const item = classifyResponse(details);
-    if (!item) return;
-    restore().then(() => {
-      let items = tabMedia.get(details.tabId);
-      if (!items) tabMedia.set(details.tabId, (items = new Map()));
-      const previous = items.get(item.url);
-      items.delete(item.url); // re-insert as most recent
-      items.set(item.url, { ...previous, ...item, size: item.size ?? previous?.size ?? null, seenAt: Date.now() });
-      while (items.size > MAX_ITEMS_PER_TAB) items.delete(items.keys().next().value);
-      updateBadge(details.tabId);
-      persist();
-      refreshMenusSoon();
-    });
+    if (item) addMedia(details.tabId, { ...item, pending: false });
+    else dropPending(details.tabId, mediaKey(details.url));
   },
   { urls: ['http://*/*', 'https://*/*'] },
   ['responseHeaders'],
 );
 
+api.webRequest.onErrorOccurred.addListener(
+  (details) => {
+    if (details.tabId >= 0) dropPending(details.tabId, mediaKey(details.url));
+  },
+  { urls: ['http://*/*', 'https://*/*'] },
+);
+
 api.tabs.onUpdated.addListener((tabId, info) => {
-  // A new document (not a same-document/history navigation) starts fresh.
-  if (info.status === 'loading' && info.url) clearTab(tabId);
+  // Another page (or another address in a single-page site) starts fresh.
+  if (info.status === 'loading' && info.url) restore().then(() => clearTabOnNavigation(tabId));
   if (info.url || info.status === 'complete') refreshMenusSoon();
 });
 api.tabs.onRemoved.addListener((tabId) => {

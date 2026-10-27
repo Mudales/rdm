@@ -15,6 +15,7 @@ import {
   isSupportedKind,
   DEFAULT_SETTINGS,
   browserName,
+  classifyRequest,
   compareVersions,
 } from '../lib/detect.js';
 import { DEFAULT_RULES, capturesSite, decide, extensionForMime, glob } from '../lib/capture.js';
@@ -103,6 +104,25 @@ export const cases = [
     t.equal(downloadCandidate({ url: 'https://x/a.zip', filename: 'a.zip' }, { ...s, captureDownloads: false }), null);
   }],
 
+  ['media is recognised when its request starts, before the server answers', (t) => {
+    const s3 = 'https://bucket.s3.eu-west-2.amazonaws.com/lessons/85__%D7%90%D7%99%D7%9F.mp3?response-content-type=audio%2Fmpeg&X-Amz-Signature=abc';
+    t.deepEqual(classifyRequest({ url: `${s3}#t=1`, type: 'media' }), {
+      kind: 'audio', url: s3, contentType: null, size: null, fileName: '85__אין.mp3', pending: true,
+    });
+    t.equal(classifyRequest({ url: 'https://x/clip.MP4', type: 'media' }).kind, 'video');
+    t.equal(classifyRequest({ url: 'https://x/master.m3u8?t=1', type: 'xmlhttprequest' }).kind, 'hls');
+    t.equal(classifyRequest({ url: 'https://x/manifest.mpd', type: 'other' }).kind, 'dash');
+    // Only what the address says: no extension, or not a media type.
+    t.equal(classifyRequest({ url: 'https://x/stream?id=3', type: 'media' }), null);
+    t.equal(classifyRequest({ url: 'https://x/seg-001.ts', type: 'media' }), null);
+    t.equal(classifyRequest({ url: 'https://x/cover.jpg', type: 'media' }), null);
+    // Pages, frames and images are not media requests; segments of adaptive players are not videos.
+    t.equal(classifyRequest({ url: 'https://x/clip.mp4', type: 'main_frame' }), null);
+    t.equal(classifyRequest({ url: 'https://x/clip.mp4', type: 'image' }), null);
+    t.equal(classifyRequest({ url: 'https://r1.googlevideo.com/videoplayback?mime=video%2Fmp4&x.mp4', type: 'media' }), null);
+    t.equal(classifyRequest({ url: 'blob:https://x/1', type: 'media' }), null);
+  }],
+
   ['versions compare by number, not text', (t) => {
     t.ok(compareVersions('0.10.0', '0.9.9') > 0);
     t.ok(compareVersions('0.3.1', '0.3.1') === 0);
@@ -189,5 +209,6 @@ export const cases = [
   ['descriptions are short and informative', (t) => {
     t.equal(describe({ kind: 'video', size: 5 * 1024 * 1024, contentType: 'video/mp4' }), 'Video · 5.0 MiB · video/mp4');
     t.equal(describe({ kind: 'hls', size: 900, contentType: 'application/vnd.apple.mpegurl' }), 'HLS stream · 900 B');
+    t.equal(describe({ kind: 'audio', size: null, contentType: null, pending: true }), 'Audio · not loaded yet');
   }],
 ];
