@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.2 (2026-10-27)
 
 ### Fixes
 - Extension: on playlist sites (lessons, podcasts) the toolbar list lost

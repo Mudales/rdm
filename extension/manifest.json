@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "rdm — Rust Download Manager",
   "short_name": "rdm",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Send downloads, videos and links to the rdm download manager.",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAxSjAvKlLO6mBKikNeDCnZ53aJgIVb07xC2419Suru/bwSvWBPtsNfpZ3VvSI8bF1JB7i96reuMjPhlfGstDkulRQNtObtOB+ZbsME3R1Pr/grUazpUAN5C/FFC8uB4cBPe8WnmhFiN6chVCbQxysttkBE5ipmiFBRwmjqJy5jCgYt0rTEzgTYZtC2F81WlA5W6sllXSxUe+bC8VKBsngXb4PrduIYn7LSEikwlUUN7MxNI4tJpa3SJByF87iDkt3rXzsZpmddbxE05SJhsG2pTzld2nSV87I3Dc1aVtwgcEjT1U3tWIQygGRCaxPypm83nbyN2CyaiSTMyrPnnm1xQIDAQAB",
   "browser_specific_settings": {
