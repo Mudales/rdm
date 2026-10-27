@@ -7,7 +7,15 @@ with no build step.
 ## What it does
 
 - **Detects media.** `webRequest.onHeadersReceived` watches responses for
-  video/audio content types and `.m3u8` / `.mpd` playlists. Stream segments,
+  video/audio content types and `.m3u8` / `.mpd` playlists. Files whose
+  address names a media type (`.mp3`, `.mp4`, `.m3u8`, …) are listed as
+  soon as they are requested (`onBeforeRequest`), marked *not loaded yet*
+  until the server answers: browsers open only 6 connections to a server,
+  so a playlist page whose player keeps earlier files open leaves the next
+  request waiting. An entry whose answer is not media, or whose request
+  fails, is dropped. When the page's address changes the list starts over,
+  keeping what was requested in the last 3 seconds (a single-page site
+  starts the next file as it changes the address). Stream segments,
   small previews and failed responses are ignored. The toolbar badge shows
   how many items were found on the tab.
 - **Adds a Download button on videos.** Hovering a video shows a button in

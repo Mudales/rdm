@@ -99,6 +99,28 @@ export function classifyResponse({ url, statusCode, responseHeaders }) {
   return null;
 }
 
+/** Request types that can carry media (an <audio>/<video>, or a player's fetch). */
+const MEDIA_REQUEST_TYPES = ['media', 'xmlhttprequest', 'other'];
+
+/**
+ * Media recognised from a request as it starts, by its address alone:
+ * `{ kind, url, contentType: null, size: null, fileName, pending: true }`,
+ * or null. Browsers open only 6 connections to a server at once (HTTP/1.1),
+ * so a page whose player keeps earlier files open (a playlist) leaves the
+ * next request waiting, sometimes for minutes; it is offered right away
+ * rather than when the server answers. `classifyResponse` fills in the size
+ * and type then, or the entry is dropped.
+ */
+export function classifyRequest({ url, type }) {
+  if (!isHttp(url) || !MEDIA_REQUEST_TYPES.includes(type)) return null;
+  if (ADAPTIVE_CHUNKS.some((re) => re.test(url))) return null;
+  const ext = extensionOf(url);
+  const kind =
+    ext === 'm3u8' ? 'hls' : ext === 'mpd' ? 'dash' : KINDS.video.includes(ext) ? 'video' : KINDS.audio.includes(ext) ? 'audio' : null;
+  if (!kind) return null;
+  return { kind, url: mediaKey(url), contentType: null, size: null, fileName: fileNameFromUrl(url), pending: true };
+}
+
 /** `[{name, value}]` cookies → a `Cookie` header value. */
 export function cookieHeader(cookies) {
   return (cookies ?? []).map((c) => `${c.name}=${c.value}`).join('; ');
@@ -177,6 +199,8 @@ export function describe(item) {
   const parts = [label];
   if (item.size) parts.push(formatBytes(item.size));
   if (item.contentType && (item.kind === 'video' || item.kind === 'audio')) parts.push(item.contentType);
+  // Requested, but the server has not answered yet (see classifyRequest).
+  if (item.pending) parts.push('not loaded yet');
   return parts.join(' · ');
 }
 
