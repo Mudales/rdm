@@ -395,10 +395,15 @@ async fn serve(
         && faults
             .body_fault_limit
             .is_none_or(|limit| shared.stats.body_faults.fetch_add(1, Ordering::Relaxed) < limit);
+    // The overrun deliberately outruns the `Content-Range` just sent.
+    let body_end = match code {
+        StatusCode::PARTIAL_CONTENT => (end + faults.range_overrun).min(size),
+        _ => end,
+    };
     let plan = BodyPlan {
         seed: cfg.seed,
         start: first,
-        end,
+        end: body_end,
         rate: cfg.per_connection_rate,
         drop_after: faults.drop_after.filter(|_| body_fault),
         stall_after: faults.stall_after.filter(|_| body_fault),

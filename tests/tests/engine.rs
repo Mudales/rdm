@@ -38,6 +38,35 @@ async fn segmented_download_is_byte_exact() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn encoded_entity_is_never_segmented() {
+    // A store that keeps the file gzipped answers `Range` against the
+    // compressed copy: the offsets, and the total in `Content-Range`, are the
+    // compressed ones, while the body arrives decompressed. Splitting that
+    // into segments writes compressed and decompressed bytes into one file,
+    // which ends up the compressed length and corrupt. Only one plain stream
+    // returns the file itself.
+    let size = 5 * MIB + 4_096;
+    let mut cfg = MockConfig::new(size);
+    cfg.extra_headers = vec![("x-goog-stored-content-encoding".into(), "gzip".into())];
+    let server = MockServer::start(cfg).await.unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    let dest = dir.path().join("out.bin");
+
+    let handle = engine()
+        .start(spec(&server, Destination::File(dest.clone()), 8))
+        .unwrap();
+    let (path, got_size, _) = completed(handle).await;
+
+    assert_eq!((path.as_path(), got_size), (dest.as_path(), size));
+    assert_content(&dest, 0, size);
+    assert_eq!(
+        server.peak_connections(),
+        1,
+        "must not segment an entity whose ranges do not address the file"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn multiple_connections_beat_one_when_each_is_capped() {
     let size = 4 * MIB;
     let mut cfg = MockConfig::new(size);
