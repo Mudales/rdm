@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.3 (2026-10-29)
 
 ### Fixes
 - Downloads from servers that keep a file compressed (Google Cloud
