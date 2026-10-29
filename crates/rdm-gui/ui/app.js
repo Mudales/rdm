@@ -2006,6 +2006,9 @@ function renderSetupGuide() {
   $('#setup-folder').textContent = g.folder;
   $('#setup-folder').title = g.folder;
   $('#setup-copy').textContent = g.opened ? 'Copy path' : 'Copy page address';
+  const openPage = $('#setup-open-page');
+  openPage.textContent = g.browser === 'firefox' ? 'Open debugging page' : 'Open extensions page';
+  openPage.title = `Opens ${g.page} in ${g.name}.`;
   $('#setup-guide-note').textContent =
     g.browser === 'firefox'
       ? 'Firefox removes temporary add-ons when it closes. Until rdm is on addons.mozilla.org, repeat this after restarting Firefox.'
@@ -2045,6 +2048,21 @@ $('#setup-copy').addEventListener('click', () => {
   if (g) copyText(g.opened ? g.folder : g.page);
 });
 $('#setup-reveal').addEventListener('click', () => setup.guide && call('reveal_extension_folder', { browser: setup.guide.browser }));
+// `chrome://extensions` and the like cannot be handed to the system, so the
+// browser's own executable opens them; rdm already does this once when the
+// extension is set up, and this button does it again for a closed tab.
+$('#setup-open-page').addEventListener('click', () => {
+  const g = setup.guide;
+  if (!g) return;
+  call('open_extensions_page', { browser: g.browser })
+    .then(() => {
+      // The page is up, so the next step pastes the folder in its dialog.
+      g.opened = true;
+      navigator.clipboard.writeText(g.folder).catch(() => {});
+      renderSetupGuide();
+    })
+    .catch(() => {});
+});
 
 /** yt-dlp counts as set up when it is there, with Deno where rdm can get it. */
 const webVideoReady = (s) => !!s.ytdlp.path && (!!s.deno.path || !s.downloads.some((d) => d.name === 'Deno'));

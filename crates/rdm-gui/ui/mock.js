@@ -179,6 +179,10 @@ function setStatus(id, status) {
 
 const delay = (ms) => new Promise((res) => setTimeout(res, ms));
 
+/** The page where an unpacked extension is loaded, as `extension.rs` has it. */
+const extensionsPage = (browser) =>
+  ({ edge: 'edge://extensions', brave: 'brave://extensions', firefox: 'about:debugging#/runtime/this-firefox' })[browser] ?? 'chrome://extensions';
+
 const commands = {
   list_downloads: () => [...records.values()].map((r) => ({ ...r })),
   live_progress: () => [],
@@ -370,7 +374,7 @@ const commands = {
       detected: b.detected,
       registered: b.installed && b.current,
       folder: `${home}/../Library/Application Support/dev.rdm.desktop/rdm-browser-extension/${b.browser === 'firefox' ? 'firefox' : 'chromium'}`,
-      page: { edge: 'edge://extensions', brave: 'brave://extensions', firefox: 'about:debugging#/runtime/this-firefox' }[b.browser] ?? 'chrome://extensions',
+      page: extensionsPage(b.browser),
       seen: extensionsSeen[b.browser] ?? null,
     })),
     others: [],
@@ -387,7 +391,7 @@ const commands = {
     }, 4000);
     return {
       folder: `${home}/../Library/Application Support/dev.rdm.desktop/rdm-browser-extension/${browser === 'firefox' ? 'firefox' : 'chromium'}`,
-      page: browser === 'firefox' ? 'about:debugging#/runtime/this-firefox' : 'chrome://extensions',
+      page: extensionsPage(browser),
       opened: browser !== 'edge',
     };
   },
