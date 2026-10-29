@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## v0.4.4 (2026-10-29)
 
 ### Fixes
 - Windows: downloads yt-dlp handled itself failed with *yt-dlp finished

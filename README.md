@@ -4,7 +4,7 @@ A cross-platform (macOS, Windows, Linux) download manager written in Rust,
 inspired by Internet Download Manager and
 [ab-download-manager](https://github.com/amir1376/ab-download-manager).
 
-> **Status:** v0.4.3. The download engine (`rdm-core`), the headless `rdm`
+> **Status:** v0.4.4. The download engine (`rdm-core`), the headless `rdm`
 > CLI, the desktop app (`rdm-gui`, backed by `rdm-manager`), browser
 > integration (extension, `rdm-host`, `rdm-ipc`), streaming media
 > (`rdm-media`: HLS/DASH), IDM-style extras (scheduler, import/export,
