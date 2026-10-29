@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+### Improvements
+- The extension setup assistant gained an **Open extensions page** button.
+  rdm opens that page once while setting the extension up, but a closed tab,
+  or a browser that was not running, left nothing but an address to copy and
+  paste by hand.
+
 ## v0.4.4 (2026-10-29)
 
 ### Fixes
