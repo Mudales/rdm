@@ -172,6 +172,68 @@ async fn other_protocols_are_downloaded_by_ytdlp() {
     );
 }
 
+/// Windows: yt-dlp encodes what it prints in the system's ANSI code page,
+/// never UTF-8, so a Hebrew file name comes back as bytes that are not
+/// valid UTF-8 (or, on another code page, with the letters dropped). The
+/// finished file must still be found.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_file_name_outside_the_code_page_is_still_reported() {
+    let dir = tempfile::tempdir().unwrap();
+    let ytdlp = fake_ytdlp(
+        dir.path(),
+        json!({
+            "info": {"title": "מהצד השני", "formats": [
+                {"format_id": "rtmp-720", "ext": "flv", "protocol": "rtmp", "url": "rtmp://media.example/live/x",
+                 "vcodec": "h264", "acodec": "aac", "height": 720}
+            ]},
+            "ansi": true,
+            "download": {"bytes": 5000, "ext": "mp4"}
+        }),
+    );
+    let mut job = site_job(dir.path());
+    job.output = dir.path().join("out").join("מהצד השני 29.10.2026.mp4");
+    let wanted = job.output.clone();
+
+    let (result, events) = run(&media(ytdlp), job).await;
+    let MediaOutcome::Completed { path, size } = result.unwrap() else {
+        panic!("not completed")
+    };
+    assert_eq!((path, size), (wanted, 5000));
+
+    let download_run = runs(dir.path()).pop().unwrap();
+    // The path comes back through `--print-to-file`, which yt-dlp writes as
+    // UTF-8 whatever the code page is.
+    assert!(download_run.iter().any(|a| a == "--print-to-file"));
+    // `--print` makes yt-dlp quiet, and a quiet yt-dlp reports no progress
+    // at all unless it is asked for.
+    assert!(download_run.iter().any(|a| a == "--progress"));
+    assert!(
+        events
+            .iter()
+            .any(|e| matches!(e, MediaEvent::Progress(p) if p.bytes == 5000)),
+        "{events:?}"
+    );
+}
+
+/// yt-dlp's own error text is in the same code page, and used to be thrown
+/// away whole when it was not UTF-8.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_error_outside_the_code_page_is_still_shown() {
+    let dir = tempfile::tempdir().unwrap();
+    let ytdlp = fake_ytdlp(
+        dir.path(),
+        json!({"ansi": true, "error": "ERROR: [kan11] 42: unavailable (חסום)"}),
+    );
+    let err = media(ytdlp)
+        .inspect_site(&Request::new(PAGE).unwrap())
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::YtDlp(m) if m.contains("[kan11] 42: unavailable")),
+        "{err:?}"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_site_refusing_rdm_falls_back_to_ytdlp() {
     let mut config = MockConfig::new(MIB);

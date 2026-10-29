@@ -176,15 +176,15 @@ impl YtDlp {
         let mut stderr = child.stderr.take();
         let read = async {
             let mut out = Vec::new();
-            let mut err = String::new();
+            let mut err = Vec::new();
             if let Some(s) = stdout.as_mut() {
                 s.read_to_end(&mut out).await.map_err(Error::io(&exe))?;
             }
             if let Some(s) = stderr.as_mut() {
-                let _ = s.read_to_string(&mut err).await;
+                let _ = s.read_to_end(&mut err).await;
             }
             let status = child.wait().await.map_err(Error::io(&exe))?;
-            Ok::<_, Error>((status, out, err))
+            Ok::<_, Error>((status, out, String::from_utf8_lossy(&err).into_owned()))
         };
         let (status, out, err) = tokio::time::timeout(EXTRACT_TIMEOUT, read)
             .await
@@ -314,15 +314,7 @@ impl CookieFile {
                 "{domain}\tTRUE\t/\t{secure}\t0\t{name}\t{value}\n"
             ));
         }
-        let dir =
-            std::env::temp_dir().join(format!("rdm-cookies-{}-{}", std::process::id(), unique()));
-        std::fs::create_dir(&dir).map_err(Error::io(&dir))?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
-                .map_err(Error::io(&dir))?;
-        }
+        let dir = private_dir("cookies")?;
         let path = dir.join("cookies.txt");
         std::fs::write(&path, text).map_err(Error::io(&path))?;
         Ok(Self { dir, path })
@@ -333,6 +325,20 @@ impl Drop for CookieFile {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.dir);
     }
+}
+
+/// A fresh folder of rdm's own under the temporary directory, readable only
+/// by this user, for what is handed to yt-dlp and never kept.
+fn private_dir(what: &str) -> Result<PathBuf> {
+    let dir = std::env::temp_dir().join(format!("rdm-{what}-{}-{}", std::process::id(), unique()));
+    std::fs::create_dir(&dir).map_err(Error::io(&dir))?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))
+            .map_err(Error::io(&dir))?;
+    }
+    Ok(dir)
 }
 
 fn unique() -> u64 {
@@ -886,6 +892,49 @@ pub(crate) fn parse_progress(line: &str) -> Option<YtDlpProgress> {
     })
 }
 
+/// Where yt-dlp writes the finished file's path, in a private temporary
+/// folder that is removed afterwards.
+///
+/// The path cannot be read from yt-dlp's stdout: yt-dlp encodes everything
+/// it prints with the system's preferred encoding, which on Windows is the
+/// ANSI code page and not UTF-8, so a file name outside that code page
+/// comes back either as bytes rdm cannot decode or with the characters
+/// dropped. `--print-to-file` is written as UTF-8 whatever the system says.
+struct ReportFile {
+    dir: PathBuf,
+    path: PathBuf,
+}
+
+impl ReportFile {
+    fn new() -> Result<Self> {
+        let dir = private_dir("ytdlp")?;
+        let path = dir.join("filepath.txt");
+        Ok(Self { dir, path })
+    }
+
+    /// The last path yt-dlp appended, if any.
+    fn read(&self) -> Option<PathBuf> {
+        let text = std::fs::read_to_string(&self.path).ok()?;
+        text.lines()
+            .map(str::trim_end)
+            .rfind(|l| !l.is_empty())
+            .map(PathBuf::from)
+    }
+}
+
+impl Drop for ReportFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+/// One line of yt-dlp's output, with its line ending removed. What is not
+/// UTF-8 is replaced rather than ending the stream: see [`ReportFile`].
+fn output_line(buf: &[u8]) -> std::borrow::Cow<'_, str> {
+    let end = buf.len() - buf.iter().rev().take_while(|b| b"\r\n".contains(b)).count();
+    String::from_utf8_lossy(&buf[..end])
+}
+
 /// A yt-dlp download run.
 pub(crate) struct YtDlpDownload<'a> {
     pub tools: &'a YtDlp,
@@ -915,6 +964,9 @@ impl YtDlpDownload<'_> {
         let mut push = |a: &[&str]| args.extend(a.iter().map(OsString::from));
         push(&["--no-playlist", "--newline", "--continue", "--no-mtime"]);
         push(&["--progress-template", "download:RDM %(progress)j"]);
+        // `--print` implies `--quiet`, and quiet turns the progress off:
+        // without `--progress` the template above is never printed.
+        push(&["--progress"]);
         push(&["--print", "after_move:RDMFILE %(filepath)s"]);
         push(&[
             "--concurrent-fragments",
@@ -936,6 +988,10 @@ impl YtDlpDownload<'_> {
             args.push("--ffmpeg-location".into());
             args.push(f.into());
         }
+        let report = ReportFile::new()?;
+        args.push("--print-to-file".into());
+        args.push("after_move:%(filepath)s".into());
+        args.push(report.path.clone().into());
         let mut template = self.output_stem.as_os_str().to_owned();
         template.push(".%(ext)s");
         args.push("-o".into());
@@ -955,7 +1011,8 @@ impl YtDlpDownload<'_> {
             .take()
             .ok_or_else(|| Error::Task("no stdout".into()))?;
         let mut stderr = child.stderr.take();
-        let mut lines = BufReader::new(stdout).lines();
+        let mut out = BufReader::new(stdout);
+        let mut buf = Vec::new();
         let mut file = None;
         tokio::pin!(stop);
         loop {
@@ -966,27 +1023,32 @@ impl YtDlpDownload<'_> {
                     let _ = child.wait().await;
                     return Ok(None);
                 }
-                line = lines.next_line() => match line {
-                    Ok(Some(line)) => {
-                        if let Some(p) = parse_progress(&line) {
-                            progress(p);
-                        } else if let Some(path) = line.strip_prefix("RDMFILE ") {
-                            file = Some(PathBuf::from(path));
-                        }
+                read = out.read_until(b'\n', &mut buf) => {
+                    if !matches!(read, Ok(1..)) {
+                        break;
                     }
-                    Ok(None) | Err(_) => break,
-                },
+                    let line = output_line(&buf);
+                    if let Some(p) = parse_progress(&line) {
+                        progress(p);
+                    } else if let Some(path) = line.strip_prefix("RDMFILE ") {
+                        file = Some(PathBuf::from(path));
+                    }
+                    buf.clear();
+                }
             }
         }
-        let mut err = String::new();
+        let mut err = Vec::new();
         if let Some(e) = stderr.as_mut() {
-            let _ = e.read_to_string(&mut err).await;
+            let _ = e.read_to_end(&mut err).await;
         }
         let status = child.wait().await.map_err(Error::io(&exe))?;
         if !status.success() {
-            return Err(ytdlp_error(&err));
+            return Err(ytdlp_error(&String::from_utf8_lossy(&err)));
         }
-        file.filter(|f| f.is_file())
+        report
+            .read()
+            .or(file)
+            .filter(|f| f.is_file())
             .map(Some)
             .ok_or_else(|| Error::YtDlp("yt-dlp finished without reporting the file".into()))
     }

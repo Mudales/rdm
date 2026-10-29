@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+### Fixes
+- Windows: downloads yt-dlp handled itself failed with *yt-dlp finished
+  without reporting the file* whenever the video's name was not plain
+  English — every Hebrew YouTube title, for instance — although yt-dlp had
+  downloaded the video. yt-dlp prints in the system's ANSI code page, never
+  UTF-8, and rdm read the finished file's path from that output: on a
+  Hebrew Windows the line was bytes rdm could not read, and on another code
+  page the letters were dropped and the path named no file. rdm now asks
+  yt-dlp for the path in a file, which yt-dlp always writes as UTF-8, and
+  no longer discards output it cannot decode — yt-dlp's own error messages
+  survive on those systems too.
+- Downloads yt-dlp handled itself showed no progress at all (0 B until they
+  finished). Asking yt-dlp to print the finished file's name also makes it
+  quiet, and a quiet yt-dlp reports no progress unless it is asked to.
+
 ## v0.4.3 (2026-10-29)
 
 ### Fixes
